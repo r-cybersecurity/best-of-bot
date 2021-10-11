@@ -18,6 +18,27 @@ rank_settings = {
             "comments": 0.15,
         },
     },
+    "Research Article": {
+        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
+        "weights": {
+            "karma": 0.75,
+            "comments": 1,
+        },
+    },
+    "Threat Actor TTPs &amp; Alerts": {
+        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
+        "weights": {
+            "karma": 0.75,
+            "comments": 1,
+        },
+    },
+    "New Vulnerability Disclosure": {
+        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
+        "weights": {
+            "karma": 0.75,
+            "comments": 1,
+        },
+    },
     "News - General": {
         "requirements": {"karma": 20, "ratio": 0.8, "comments": 6},
         "weights": {
