@@ -1,6 +1,7 @@
 import boto3
 import requests
-import pprint
+import time
+from botocore.exceptions import ClientError
 
 rank_settings = {
     "Business Security Questions &amp; Discussion": {
@@ -40,7 +41,8 @@ rank_settings = {
     },
 }
 
-client = boto3.client('dynamodb')
+client = boto3.client("dynamodb")
+
 
 def logic_handler():
     url = "https://www.reddit.com/r/cybersecurity/hot/.json?count=25"
@@ -79,15 +81,53 @@ def logic_handler():
         attempts += 1
         stored_submission = {"priority": 0}
 
+        # identify which submission we want to tweet the most
         for submission in qualifying_submissions:
             if not submission["link"] in disqualified_submissions:
                 if submission["priority"] > stored_submission["priority"]:
                     stored_submission = submission
-        
+
         disqualified_submissions.append(stored_submission["link"])
         print(str(stored_submission["priority"]) + " " + stored_submission["link"])
-        
-        # check in DynamoDB if the thing has been tweeted
+
+        # check in DynamoDB if the submission has been tweeted
+        try:
+            dynamo_get = client.get_item(
+                TableName="twitter_bot__r_cybersecurity",
+                Key={"link": {"S": stored_submission["link"]}},
+            )
+        except ClientError as e:
+            print(e.response["Error"]["Message"])
+            # we don't know if we've tweeted this, so let's skip it
+            # this enforces at most once tweeting
+            continue
+
+        # we've confidently tweeted the submission, skip it
+        if "Item" in dynamo_get:
+            print("-- already tweeted, skipping")
+            continue
+
+        # we haven't tweeted the submission, try logging that we'll tweet it
+        expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
+        try:
+            dynamo_put = client.put_item(
+                TableName="twitter_bot__r_cybersecurity",
+                Item={"link": {"S": stored_submission["link"]}, "ttl": {"N": expires}},
+            )
+        except ClientError as e:
+            print(e.response["Error"]["Message"])
+            # we don't know if we've saved this, so let's skip it
+            # this enforces at most once tweeting
+            continue
+        except Exception as e:
+            print(e)
+            # we don't know if we've saved this, so let's skip it
+            # this enforces at most once tweeting
+            continue
+
+        # needs to actually have tweeting logic
+        print("Success!")
+        tweeted = True
 
     if tweeted:
         return 200, {"Reason": "Tweeted successfully."}
