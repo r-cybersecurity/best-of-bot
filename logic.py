@@ -130,7 +130,7 @@ def logic_handler():
 
         print("-- attempting tweet")
         tweeted = True
-        tweet = f'#cybersecurity professionals discuss: {stored_submission["title"]}\n\n{stored_submission["link"]}'
+        tweet = f'#cybersecurity professionals discuss: {stored_submission["title"]}\n\nhttps://reddit.com{stored_submission["link"]}'
 
         CONSUMER_KEY = os.getenv("CONSUMER_KEY")
         CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
