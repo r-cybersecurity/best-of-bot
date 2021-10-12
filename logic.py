@@ -1,64 +1,46 @@
 import boto3
+import os
 import requests
 import time
+import tweepy
 from botocore.exceptions import ClientError
 
 rank_settings = {
     "Business Security Questions &amp; Discussion": {
-        "requirements": {"karma": 3, "ratio": 0.7, "comments": 4},
-        "weights": {
-            "karma": 1,
-            "comments": 1,
-        },
-    },
-    "Career Questions &amp; Discussion": {
-        "requirements": {"karma": 5, "ratio": 0.8, "comments": 10},
-        "weights": {
-            "karma": 0.1,
-            "comments": 0.15,
-        },
+        "karma": 0.5,
+        "comments": 1,
     },
     "Research Article": {
-        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
-        "weights": {
-            "karma": 0.75,
-            "comments": 1,
-        },
+        "karma": 0.2,
+        "comments": 0.5,
     },
     "Threat Actor TTPs &amp; Alerts": {
-        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
-        "weights": {
-            "karma": 0.75,
-            "comments": 1,
-        },
+        "karma": 0.2,
+        "comments": 0.5,
     },
     "New Vulnerability Disclosure": {
-        "requirements": {"karma": 7, "ratio": 0.85, "comments": 3},
-        "weights": {
-            "karma": 0.75,
-            "comments": 1,
-        },
+        "karma": 0.2,
+        "comments": 0.5,
+    },
+    "Career Questions &amp; Discussion": {
+        "karma": 0.2,
+        "comments": 0.25,
+    },
+    "Other": {
+        "karma": 0.1,
+        "comments": 0.25,
     },
     "News - General": {
-        "requirements": {"karma": 20, "ratio": 0.8, "comments": 6},
-        "weights": {
-            "karma": 0.05,
-            "comments": 0.1,
-        },
+        "karma": 0.05,
+        "comments": 0.1,
     },
     "News - Breaches &amp; Ransoms": {
-        "requirements": {"karma": 20, "ratio": 0.8, "comments": 6},
-        "weights": {
-            "karma": 0.05,
-            "comments": 0.075,
-        },
+        "karma": 0.05,
+        "comments": 0.1,
     },
     "Corporate Blog": {
-        "requirements": {"karma": 30, "ratio": 0.85, "comments": 10},
-        "weights": {
-            "karma": 0.05,
-            "comments": 0.075,
-        },
+        "karma": 0.05,
+        "comments": 0.1,
     },
 }
 
@@ -146,9 +128,20 @@ def logic_handler():
             # this enforces at most once tweeting
             continue
 
-        # needs to actually have tweeting logic
-        print("Success!")
+        print("-- attempting tweet")
         tweeted = True
+        tweet = f'#cybersecurity professionals discuss: {stored_submission["title"]}\n\n{stored_submission["link"]}'
+
+        CONSUMER_KEY = os.getenv("CONSUMER_KEY")
+        CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
+        ACCESS_KEY = os.getenv("ACCESS_KEY")
+        ACCESS_SECRET = os.getenv("ACCESS_SECRET")
+
+        if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
+            auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+            auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+            api = tweepy.API(auth)
+            api.update_status(status=tweet)
 
     if tweeted:
         return 200, {"Reason": "Tweeted successfully."}
@@ -161,19 +154,10 @@ def submission_ranker(submission):
         return False
 
     try:
-        settings = rank_settings[submission["link_flair_text"]]
+        weights = rank_settings[submission["link_flair_text"]]
     except Exception:
         return False
 
-    requirements = settings["requirements"]
-    if (
-        submission["ups"] < requirements["karma"]
-        or submission["upvote_ratio"] < requirements["ratio"]
-        or submission["num_comments"] < requirements["comments"]
-    ):
-        return False
-
-    weights = settings["weights"]
     priority = (
         submission["upvote_ratio"]
         * submission["upvote_ratio"]
@@ -183,7 +167,7 @@ def submission_ranker(submission):
         * weights["comments"]
     )
 
-    if priority < 5:
+    if priority < 10:
         return False
 
     return {
