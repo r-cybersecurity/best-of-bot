@@ -142,6 +142,8 @@ def logic_handler():
             auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
             api = tweepy.API(auth)
             api.update_status(status=tweet)
+        else:
+            print("-- environment variables not present to tweet")
 
     if tweeted:
         return 200, {"Reason": "Tweeted successfully."}
