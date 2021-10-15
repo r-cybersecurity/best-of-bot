@@ -9,7 +9,7 @@ This follows a philosophy of "less is more" - some days there are only a handful
 
 ### How Does it Work?
 
-The contents of this repository are an AWS Lambda function. The Lambda function is called by EventBridge every hour, to check the top posts on the subreddit. It then prioritizes and filters them with the aforementioned checks (see `logic.py` - pretty straightforward).
+The contents of this repository are an AWS Lambda function. The Lambda function is called by EventBridge every hour, to check the top posts on the subreddit. It then prioritizes and filters them with the aforementioned checks.
 
 Then for each post, in descending order of priority, it checks in DynamoDB to see if there is a record of this being tweeted already. If it was, it skips to the next post. If it wasn't, it adds an entry to DynamoDB stating what is being posted, with a TTL of two weeks (so we automatically forget what was posted after there's no more chance for it to appear in Reddit's hot posts list - keeping costs from ballooning). The choices made in the DynamoDB logic ensure that this bot will post *at-most-once* - there may be cases where a tweet is saved to DynamoDB, but is not actually tweeted. We prefer that instead of at-least-once delivery (which could make duplicate tweets).
 
@@ -19,7 +19,7 @@ The total ongoing cost of this bot is currently estimated to be $0.02/mo - so do
 
 ### Program Layout
 
-To keep local testing straightforward, all application logic is in `logic.py`. You can invoke `console.py` to start a local run, or the lambda entrypoint is in `lambda_function.py`. Both do the same thing - run the function in `logic.py`. Could have *definitely* all been one file, might refactor later.
+To keep local testing straightforward, all application logic is in `lambda_function.py`. You can invoke it from your console as well for local testing. Without any credentials provided, it will show the current priority list for posting - but if needed, you can also save the required AWS and Tweepy credentials to your environment to run it fully locally.
 
 ### Deployment Notes
 
