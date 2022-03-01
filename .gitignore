@@ -1,6 +1,7 @@
 # Custom
 deploy_me.zip
 package/
+*.db
 
 # Project specific
 *.ipynb

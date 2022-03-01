@@ -137,7 +137,6 @@ def lambda_handler(event, context):
             continue
 
         print("-- attempting tweet")
-        tweeted = True
         tweet = f'#cybersecurity professionals discuss: {stored_submission["title"]}\n\nhttps://reddit.com{stored_submission["link"]}'
 
         CONSUMER_KEY = os.getenv("CONSUMER_KEY")
@@ -152,13 +151,14 @@ def lambda_handler(event, context):
             auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
             api = tweepy.API(auth)
             api.update_status(status=tweet)
+            tweeted = True
         else:
             print("-- environment variables not present to tweet")
 
     if tweeted:
         return {"statusCode": 200, "body": "Tweeted successfully."}
     if not tweeted:
-        return {"statusCode": 200, "body": "Nothing to tweet; exhausted."}
+        return {"statusCode": 200, "body": "Exhausted all options for tweeting."}
 
 
 def submission_ranker(submission):
@@ -168,7 +168,7 @@ def submission_ranker(submission):
     try:
         weights = rank_settings[submission["link_flair_text"]]
     except Exception:
-        return False
+        weights = rank_settings["Other"]
 
     priority = (
         submission["upvote_ratio"]
@@ -186,6 +186,7 @@ def submission_ranker(submission):
         "priority": priority,
         "link": submission["permalink"],
         "title": submission["title"],
+        "flair": submission["link_flair_text"]
     }
 
 
