@@ -1,6 +1,7 @@
 import boto3
 import json
 import os
+import random
 import requests
 import time
 import tweepy
@@ -137,7 +138,9 @@ def lambda_handler(event, context):
             continue
 
         print("-- attempting tweet")
-        tweet = f'#cybersecurity professionals discuss: {stored_submission["title"]}\n\nhttps://reddit.com{stored_submission["link"]}'
+        tweet = tweet_maker(
+            stored_submission["title"], f'https://reddit.com{stored_submission["link"]}'
+        )
 
         CONSUMER_KEY = os.getenv("CONSUMER_KEY")
         CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
@@ -186,8 +189,52 @@ def submission_ranker(submission):
         "priority": priority,
         "link": submission["permalink"],
         "title": submission["title"],
-        "flair": submission["link_flair_text"]
+        "flair": submission["link_flair_text"],
     }
+
+
+def tweet_maker(title, link):
+    with open("relevant_hashtags.json") as hashtags_file:
+        hashtags = json.load(hashtags_file)
+
+    tokens_to_clean = title.split(" ")
+    clean_tokens = []
+    hashtag_options = {}
+    for token_to_clean in tokens_to_clean:
+        # could also ensure no cashtags?
+        clean_token = token_to_clean.strip("#@")
+        possible_hashtag = f"#{clean_token}".rstrip(
+            ".!?,'|\"[];:<>/-=_+()*&^%$#@`~#"
+        ).lower()
+
+        if possible_hashtag in hashtags.keys():
+            if not len(hashtag_options) == 0:
+                if avg(hashtag_options.values()) - 5 > hashtags[possible_hashtag]:
+                    hashtag_options = {}
+
+            hashtag_options[f"#{clean_token}"] = hashtags[possible_hashtag]
+        clean_tokens.append(clean_token)
+
+    random_hashtag = ""
+    if len(hashtag_options.keys()) > 0:
+        random_hashtag_shuffle = list(hashtag_options.keys())
+        random.shuffle(random_hashtag_shuffle)
+        random_hashtag = random_hashtag_shuffle[0]
+
+    new_title_tokens = []
+    for clean_token in clean_tokens:
+        if f"#{clean_token}" == random_hashtag:
+            new_title_tokens.append(random_hashtag)
+        else:
+            new_title_tokens.append(clean_token)
+
+    new_title_tokens.append(link)
+    new_title = " ".join(new_title_tokens)
+    return new_title
+
+
+def avg(lst):
+    return sum(list(lst)) / len(list(lst))
 
 
 if __name__ == "__main__":

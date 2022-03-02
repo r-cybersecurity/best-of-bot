@@ -1,4 +1,5 @@
 import argparse
+import numpy
 import sqlite3
 from pprint import pprint
 from sqlite3 import Error
@@ -54,28 +55,47 @@ parser = argparse.ArgumentParser(
     description="Fetches data from a number of sources and compiles a training set"
 )
 parser.add_argument(
-    "--sqlite-twint", action="store", type=str, required=True, help="Where the bird site is stored"
+    "--sqlite-twint",
+    action="store",
+    type=str,
+    required=True,
+    help="Where the bird site is stored",
+)
+parser.add_argument(
+    "--min-percentile",
+    action="store",
+    type=int,
+    required=True,
+    help="The minimum threshold of frequency to include a given hashtag",
 )
 args = parser.parse_args()
 
 data = get_only_tweets_from_twint(args.sqlite_twint)
 
 print("Counting the number of times each user used a unique hashtag")
-unique_hashtag_uses = {}
-unique_hashtag_deduplicator = []
+unique_hashtag_count = {}
+unique_hashtag_set = set()
 for tweet in data:
     tokens = tweet["content"].split(" ")
     for token in tokens:
         if token.startswith("#") and len(token) > 2:
-            token = token.rstrip(" .!?,").lower()
+            token = token.rstrip(" .!?,'|\"[];:<>/-=_+()*&^%$#@`~#").lower()
             unique_key = f'{tweet["author"]} + {token}'
-            if not unique_key in unique_hashtag_deduplicator:
-                unique_hashtag_deduplicator.append(unique_key)
-                if token in unique_hashtag_uses.keys():
-                    unique_hashtag_uses[token] += 1
+            if not unique_key in unique_hashtag_set:
+                unique_hashtag_set.add(unique_key)
+                if token in unique_hashtag_count.keys():
+                    unique_hashtag_count[token] += 1
                 else:
-                    unique_hashtag_uses[token] = 1
+                    unique_hashtag_count[token] = 1
 
-for hashtag, count in unique_hashtag_uses.items():
-    if count > 10:
+
+print(
+    f"Dumping hashtags which had a unique use frequency above the {args.min_percentile}th percentile"
+)
+count_values = numpy.array(list(unique_hashtag_count.values()))
+minimum_count = numpy.percentile(count_values, args.min_percentile)
+
+print(f"(a hashtag needs to be used by {minimum_count} to be included)")
+for hashtag, count in unique_hashtag_count.items():
+    if count > minimum_count:
         print(f'"{hashtag}": {count},')
