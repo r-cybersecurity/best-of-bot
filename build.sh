@@ -11,3 +11,4 @@ cd package
 zip -r ../deploy_me.zip .
 cd ..
 zip -g deploy_me.zip lambda_function.py
+zip -g deploy_me.zip relevant_hashtags.json
