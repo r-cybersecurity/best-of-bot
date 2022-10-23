@@ -10,46 +10,17 @@ from pprint import pprint
 
 
 rank_settings = {
-    "Ask Me Anything!": {
-        "karma": 1,
-        "comments": 1,
-    },
-    "Business Security Questions &amp; Discussion": {
-        "karma": 0.5,
-        "comments": 1,
-    },
-    "Research Article": {
-        "karma": 0.2,
-        "comments": 0.5,
-    },
-    "Threat Actor TTPs &amp; Alerts": {
-        "karma": 0.2,
-        "comments": 0.5,
-    },
-    "New Vulnerability Disclosure": {
-        "karma": 0.2,
-        "comments": 0.5,
-    },
-    "Career Questions &amp; Discussion": {
-        "karma": 0.2,
-        "comments": 0.25,
-    },
-    "Other": {
-        "karma": 0.1,
-        "comments": 0.25,
-    },
-    "News - General": {
-        "karma": 0.05,
-        "comments": 0.1,
-    },
-    "News - Breaches &amp; Ransoms": {
-        "karma": 0.05,
-        "comments": 0.1,
-    },
-    "Corporate Blog": {
-        "karma": 0.05,
-        "comments": 0.1,
-    },
+    "Ask Me Anything!": {"karma": 1, "comments": 1},
+    "Business Security Questions &amp; Discussion": {"karma": 0.5, "comments": 1},
+    "Research Article": {"karma": 0.2, "comments": 0.5},
+    "Threat Actor TTPs &amp; Alerts": {"karma": 0.2, "comments": 0.5},
+    "New Vulnerability Disclosure": {"karma": 0.2, "comments": 0.5},
+    "Career Questions &amp; Discussion": {"karma": 0.2, "comments": 0.25},
+    "Other": {"karma": 0.1, "comments": 0.25},
+    "News - General": {"karma": 0.05, "comments": 0.1},
+    "News - Breaches &amp; Ransoms": {"karma": 0.05, "comments": 0.1},
+    "Corporate Blog": {"karma": 0.05, "comments": 0.1},
+    "Meta / Moderator Transparency": {"karma": 0, "comments": 0},
 }
 
 
@@ -57,6 +28,11 @@ client = boto3.client("dynamodb")
 
 
 def lambda_handler(event, context):
+    testing = False
+    if "testing" in event.keys():
+        if event["testing"] == True:
+            testing = True
+
     url = "https://www.reddit.com/r/cybersecurity/hot/.json?count=25"
     headers = {"User-Agent": "r/cybersecurity Twitter Bot"}
 
@@ -102,61 +78,70 @@ def lambda_handler(event, context):
         disqualified_submissions.append(stored_submission["link"])
         print(str(stored_submission["priority"]) + " " + stored_submission["link"])
 
-        # check in DynamoDB if the submission has been tweeted
-        try:
-            dynamo_get = client.get_item(
-                TableName="twitter_bot__r_cybersecurity",
-                Key={"link": {"S": stored_submission["link"]}},
-            )
-        except ClientError as e:
-            print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
-            # we don't know if we've tweeted this, so let's skip it
-            # this enforces at most once tweeting
-            continue
+        if not testing:
+            # check in DynamoDB if the submission has been tweeted
+            try:
+                dynamo_get = client.get_item(
+                    TableName="twitter_bot__r_cybersecurity",
+                    Key={"link": {"S": stored_submission["link"]}},
+                )
+            except ClientError as e:
+                print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
+                # we don't know if we've tweeted this, so let's skip it
+                # this enforces at most once tweeting
+                continue
 
-        # we've confidently tweeted the submission, skip it
-        if "Item" in dynamo_get:
-            print("-- already tweeted, skipping")
-            continue
+            # we've confidently tweeted the submission, skip it
+            if "Item" in dynamo_get:
+                print("-- already tweeted, skipping")
+                continue
 
-        # we haven't tweeted the submission, try logging that we'll tweet it
-        expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
-        try:
-            client.put_item(
-                TableName="twitter_bot__r_cybersecurity",
-                Item={"link": {"S": stored_submission["link"]}, "ttl": {"N": expires}},
-            )
-        except ClientError as e:
-            print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
-            # we don't know if we've saved this, so let's skip it
-            # this enforces at most once tweeting
-            continue
-        except Exception as e:
-            print(e)
-            # we don't know if we've saved this, so let's skip it
-            # this enforces at most once tweeting
-            continue
+            # we haven't tweeted the submission, try logging that we'll tweet it
+            expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
+            try:
+                client.put_item(
+                    TableName="twitter_bot__r_cybersecurity",
+                    Item={
+                        "link": {"S": stored_submission["link"]},
+                        "ttl": {"N": expires},
+                    },
+                )
+            except ClientError as e:
+                print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
+                # we don't know if we've saved this, so let's skip it
+                # this enforces at most once tweeting
+                continue
+            except Exception as e:
+                print(e)
+                # we don't know if we've saved this, so let's skip it
+                # this enforces at most once tweeting
+                continue
 
+        print("-- selecting hashtag")
+        hashtag = hashtag_picker(stored_submission)
         print("-- attempting tweet")
         tweet = tweet_maker(
-            stored_submission["title"], f'https://reddit.com{stored_submission["link"]}'
+            stored_submission["title"],
+            hashtag,
+            f'https://reddit.com{stored_submission["link"]}',
         )
 
-        CONSUMER_KEY = os.getenv("CONSUMER_KEY")
-        CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
-        ACCESS_KEY = os.getenv("ACCESS_KEY")
-        ACCESS_SECRET = os.getenv("ACCESS_SECRET")
+        if not testing:
+            CONSUMER_KEY = os.getenv("CONSUMER_KEY")
+            CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
+            ACCESS_KEY = os.getenv("ACCESS_KEY")
+            ACCESS_SECRET = os.getenv("ACCESS_SECRET")
 
-        if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
-            # failing here is good -
-            # we could unecessarily PUT all other potential tweets otherwise
-            auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
-            auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
-            api = tweepy.API(auth)
-            api.update_status(status=tweet)
-            tweeted = True
-        else:
-            print("-- environment variables not present to tweet")
+            if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
+                # failing here is good -
+                # we could unecessarily PUT all other potential tweets otherwise
+                auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+                auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+                api = tweepy.API(auth)
+                api.update_status(status=tweet)
+                tweeted = True
+            else:
+                print("-- environment variables not present to tweet")
 
     if tweeted:
         return {"statusCode": 200, "body": "Tweeted successfully."}
@@ -193,8 +178,8 @@ def submission_ranker(submission):
     }
 
 
-def tweet_maker(title, link):
-    with open("relevant_hashtags.json") as hashtags_file:
+def hashtag_picker(submission):
+    with open("security_specific_hashtags.json") as hashtags_file:
         hashtags = json.load(hashtags_file)
 
     tokens_to_clean = title.split(" ")
@@ -202,10 +187,7 @@ def tweet_maker(title, link):
     hashtag_options = {}
     for token_to_clean in tokens_to_clean:
         # could also ensure no cashtags?
-        clean_token = token_to_clean.strip("#@")
-        possible_hashtag = f"#{clean_token}".rstrip(
-            ".!?,'|\"[];:<>/-=_+()*&^%$#@`~#"
-        ).lower()
+        clean_token = token_to_clean.strip(".!?,'|\"[];:<>/-=_+()*&^%$#@`~#").lower()
 
         if possible_hashtag in hashtags.keys():
             if not len(hashtag_options) == 0:
@@ -233,9 +215,37 @@ def tweet_maker(title, link):
     return new_title
 
 
+def tweet_maker(title, hashtag, link):
+    tokens_to_clean = title.split(" ")
+    clean_tokens = []
+    for token_to_clean in tokens_to_clean:
+        # could also ensure no cashtags?
+        clean_token = token_to_clean.strip("#@")
+        clean_tokens.append(clean_token)
+
+    new_title_tokens = []
+    hashtag_used = False
+    if len(hashtag) < 1:
+        hashtag_used = True
+
+    for clean_token in clean_tokens:
+        if f"#{clean_token}" == hashtag and not hashtag_used:
+            new_title_tokens.append(hashtag)
+            hashtag_used = True
+        else:
+            new_title_tokens.append(clean_token)
+
+    if len(hashtag) > 0 and not hashtag_used:
+        new_title_tokens.append(hashtag)
+
+    new_title_tokens.append(link)
+    new_title = " ".join(new_title_tokens)
+    return new_title
+
+
 def avg(lst):
     return sum(list(lst)) / len(list(lst))
 
 
 if __name__ == "__main__":
-    pprint(lambda_handler({}, {}))
+    pprint(lambda_handler({"testing": True}, {}))

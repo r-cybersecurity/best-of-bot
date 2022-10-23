@@ -93,3 +93,6 @@ ENV/
 # IDE settings
 .vscode/
 .idea/
+
+# ensure OpenAI keys (dev only) are not committed
+config.py
