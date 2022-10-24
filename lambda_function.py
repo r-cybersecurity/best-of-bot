@@ -240,7 +240,7 @@ def openai_hashtag_selector(title, selftext_html):
 
     article = openai_article_prep(title, selftext_html)
 
-    openai_prompt = f'You are an industry leader in the cybersecurity field. You are a long-time Twitter user and great at summarizing information. What hashtags would you use on Twitter to describe the following article?\n\nArticle: "{article}"\nHashtags:'
+    openai_prompt = f'You are an industry leader in the cybersecurity field who is great at summarizing information. What hashtags would you use on Twitter to describe the following article?\n\nArticle: "{article}"\nHashtags:'
 
     openai_response_raw = openai.Completion.create(
         model="text-davinci-002",

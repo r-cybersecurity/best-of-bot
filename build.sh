@@ -4,7 +4,8 @@
 rm -rf deploy_me.zip package
 
 # install dependencies
-pip install --target ./package requests tweepy openai
+pip install --target ./package requests tweepy typing_extensions
+pip install --no-deps --target ./package openai
 
 # build zip with all data
 cd package
