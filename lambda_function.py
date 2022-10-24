@@ -1,26 +1,57 @@
 import boto3
 import json
 import os
+import openai
 import random
 import requests
 import time
 import tweepy
-from botocore.exceptions import ClientError
+from html import escape, unescape
+from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
 
 
 rank_settings = {
-    "Ask Me Anything!": {"karma": 1, "comments": 1},
-    "Business Security Questions &amp; Discussion": {"karma": 0.5, "comments": 1},
-    "Research Article": {"karma": 0.2, "comments": 0.5},
-    "Threat Actor TTPs &amp; Alerts": {"karma": 0.2, "comments": 0.5},
-    "New Vulnerability Disclosure": {"karma": 0.2, "comments": 0.5},
-    "Career Questions &amp; Discussion": {"karma": 0.2, "comments": 0.25},
-    "Other": {"karma": 0.1, "comments": 0.25},
-    "News - General": {"karma": 0.05, "comments": 0.1},
-    "News - Breaches &amp; Ransoms": {"karma": 0.05, "comments": 0.1},
-    "Corporate Blog": {"karma": 0.05, "comments": 0.1},
-    "Meta / Moderator Transparency": {"karma": 0, "comments": 0},
+    "Ask Me Anything!": {
+        "karma": 1,
+        "comments": 1,
+    },
+    "Business Security Questions &amp; Discussion": {
+        "karma": 0.5,
+        "comments": 1,
+    },
+    "Research Article": {
+        "karma": 0.2,
+        "comments": 0.5,
+    },
+    "Threat Actor TTPs &amp; Alerts": {
+        "karma": 0.2,
+        "comments": 0.5,
+    },
+    "New Vulnerability Disclosure": {
+        "karma": 0.2,
+        "comments": 0.5,
+    },
+    "Career Questions &amp; Discussion": {
+        "karma": 0.2,
+        "comments": 0.25,
+    },
+    "Other": {
+        "karma": 0.1,
+        "comments": 0.25,
+    },
+    "News - General": {
+        "karma": 0.05,
+        "comments": 0.1,
+    },
+    "News - Breaches &amp; Ransoms": {
+        "karma": 0.05,
+        "comments": 0.1,
+    },
+    "Corporate Blog": {
+        "karma": 0.05,
+        "comments": 0.1,
+    },
 }
 
 
@@ -28,11 +59,6 @@ client = boto3.client("dynamodb")
 
 
 def lambda_handler(event, context):
-    testing = False
-    if "testing" in event.keys():
-        if event["testing"] == True:
-            testing = True
-
     url = "https://www.reddit.com/r/cybersecurity/hot/.json?count=25"
     headers = {"User-Agent": "r/cybersecurity Twitter Bot"}
 
@@ -78,70 +104,80 @@ def lambda_handler(event, context):
         disqualified_submissions.append(stored_submission["link"])
         print(str(stored_submission["priority"]) + " " + stored_submission["link"])
 
-        if not testing:
-            # check in DynamoDB if the submission has been tweeted
-            try:
-                dynamo_get = client.get_item(
-                    TableName="twitter_bot__r_cybersecurity",
-                    Key={"link": {"S": stored_submission["link"]}},
-                )
-            except ClientError as e:
-                print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
-                # we don't know if we've tweeted this, so let's skip it
-                # this enforces at most once tweeting
-                continue
+        # check in DynamoDB if the submission has been tweeted
+        dynamo_get = []
+        try:
+            dynamo_get = client.get_item(
+                TableName="twitter_bot__r_cybersecurity",
+                Key={"link": {"S": stored_submission["link"]}},
+            )
+        except ClientError as e:
+            print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
+            # we don't know if we've tweeted this, so let's skip it
+            # this enforces at most once tweeting
+            continue
+        except NoCredentialsError:
+            # local devel without access to DDB, just keep going
+            pass
 
-            # we've confidently tweeted the submission, skip it
-            if "Item" in dynamo_get:
-                print("-- already tweeted, skipping")
-                continue
+        # we've confidently tweeted the submission, skip it
+        if "Item" in dynamo_get:
+            print("-- already tweeted, skipping")
+            continue
 
-            # we haven't tweeted the submission, try logging that we'll tweet it
-            expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
-            try:
-                client.put_item(
-                    TableName="twitter_bot__r_cybersecurity",
-                    Item={
-                        "link": {"S": stored_submission["link"]},
-                        "ttl": {"N": expires},
-                    },
-                )
-            except ClientError as e:
-                print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
-                # we don't know if we've saved this, so let's skip it
-                # this enforces at most once tweeting
-                continue
-            except Exception as e:
-                print(e)
-                # we don't know if we've saved this, so let's skip it
-                # this enforces at most once tweeting
-                continue
+        # we haven't tweeted the submission, try logging that we'll tweet it
+        expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
+        try:
+            client.put_item(
+                TableName="twitter_bot__r_cybersecurity",
+                Item={"link": {"S": stored_submission["link"]}, "ttl": {"N": expires}},
+            )
+        except ClientError as e:
+            print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
+            # we don't know if we've saved this, so let's skip it
+            # this enforces at most once tweeting
+            continue
+        except NoCredentialsError:
+            # local devel without access to DDB, just keep going
+            pass
+        except Exception as e:
+            print(e)
+            # we don't know if we've saved this, so let's skip it
+            # this enforces at most once tweeting
+            continue
 
-        print("-- selecting hashtag")
-        hashtag = hashtag_picker(stored_submission)
         print("-- attempting tweet")
-        tweet = tweet_maker(
-            stored_submission["title"],
-            hashtag,
-            f'https://reddit.com{stored_submission["link"]}',
-        )
 
-        if not testing:
-            CONSUMER_KEY = os.getenv("CONSUMER_KEY")
-            CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
-            ACCESS_KEY = os.getenv("ACCESS_KEY")
-            ACCESS_SECRET = os.getenv("ACCESS_SECRET")
+        title = unescape(stored_submission["title"])
+        selftext_html = ""
+        if "selftext_html" in stored_submission.keys():
+            selftext_html = unescape(stored_submission["selftext_html"])
 
-            if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
-                # failing here is good -
-                # we could unecessarily PUT all other potential tweets otherwise
-                auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
-                auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
-                api = tweepy.API(auth)
-                api.update_status(status=tweet)
-                tweeted = True
-            else:
-                print("-- environment variables not present to tweet")
+        tweet_text = tweet_maker(title, selftext_html)
+
+        # shorten link by removing title component
+        # still always counts as 23 characters though
+        post_id = stored_submission["link"].strip("/").split("/")[3]
+        post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
+
+        tweet = f"{tweet_text} {post_link}"
+        print(f"Tweeting: '{tweet}'")
+
+        CONSUMER_KEY = os.getenv("CONSUMER_KEY")
+        CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
+        ACCESS_KEY = os.getenv("ACCESS_KEY")
+        ACCESS_SECRET = os.getenv("ACCESS_SECRET")
+
+        if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
+            # failing here is good -
+            # we could unecessarily PUT all other potential tweets otherwise
+            auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+            auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+            api = tweepy.API(auth)
+            api.update_status(status=tweet)
+            tweeted = True
+        else:
+            print("-- environment variables not present to tweet")
 
     if tweeted:
         return {"statusCode": 200, "body": "Tweeted successfully."}
@@ -178,74 +214,89 @@ def submission_ranker(submission):
     }
 
 
-def hashtag_picker(submission):
-    with open("security_specific_hashtags.json") as hashtags_file:
-        hashtags = json.load(hashtags_file)
-
+def tweet_maker(title, selftext_html):
+    # budget for tweets is 280 - 24 = 256 characters
     tokens_to_clean = title.split(" ")
-    clean_tokens = []
-    hashtag_options = {}
-    for token_to_clean in tokens_to_clean:
-        # could also ensure no cashtags?
-        clean_token = token_to_clean.strip(".!?,'|\"[];:<>/-=_+()*&^%$#@`~#").lower()
 
-        if possible_hashtag in hashtags.keys():
-            if not len(hashtag_options) == 0:
-                if avg(hashtag_options.values()) - 5 > hashtags[possible_hashtag]:
-                    hashtag_options = {}
-
-            hashtag_options[f"#{clean_token}"] = hashtags[possible_hashtag]
-        clean_tokens.append(clean_token)
-
-    random_hashtag = ""
-    if len(hashtag_options.keys()) > 0:
-        random_hashtag_shuffle = list(hashtag_options.keys())
-        random.shuffle(random_hashtag_shuffle)
-        random_hashtag = random_hashtag_shuffle[0]
-
-    new_title_tokens = []
-    for clean_token in clean_tokens:
-        if f"#{clean_token}" == random_hashtag:
-            new_title_tokens.append(random_hashtag)
-        else:
-            new_title_tokens.append(clean_token)
-
-    new_title_tokens.append(link)
-    new_title = " ".join(new_title_tokens)
-    return new_title
-
-
-def tweet_maker(title, hashtag, link):
-    tokens_to_clean = title.split(" ")
     clean_tokens = []
     for token_to_clean in tokens_to_clean:
         # could also ensure no cashtags?
         clean_token = token_to_clean.strip("#@")
         clean_tokens.append(clean_token)
 
-    new_title_tokens = []
-    hashtag_used = False
-    if len(hashtag) < 1:
-        hashtag_used = True
+    hashtags = openai_hashtag_selector(title, selftext_html)
+    for hashtag in hashtags:
+        clean_tokens.append(hashtag)
 
-    for clean_token in clean_tokens:
-        if f"#{clean_token}" == hashtag and not hashtag_used:
-            new_title_tokens.append(hashtag)
-            hashtag_used = True
-        else:
-            new_title_tokens.append(clean_token)
-
-    if len(hashtag) > 0 and not hashtag_used:
-        new_title_tokens.append(hashtag)
-
-    new_title_tokens.append(link)
-    new_title = " ".join(new_title_tokens)
-    return new_title
+    tweet = " ".join(clean_tokens)
+    return tweet
 
 
-def avg(lst):
-    return sum(list(lst)) / len(list(lst))
+def openai_hashtag_selector(title, selftext_html):
+    with open("permitted_hashtags.json") as hashtags_file:
+        hashtag_options = json.load(hashtags_file)
+
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+
+    article = openai_article_prep(title, selftext_html)
+
+    openai_prompt = f'You are an industry leader in the cybersecurity field. You are a long-time Twitter user and great at summarizing information. What hashtags would you use on Twitter to describe the following article?\n\nArticle: "{article}"\nHashtags:'
+
+    openai_response_raw = openai.Completion.create(
+        model="text-davinci-002",
+        prompt=openai_prompt,
+        temperature=0,
+        max_tokens=60,
+        top_p=1.0,
+        frequency_penalty=0.5,
+        presence_penalty=0.0,
+    )
+
+    try:
+        hashtags_raw = openai_response_raw["choices"][0]["text"]
+    except Exception as e:
+        print(f"OpenAI threw exception {str(e)}, no hashtags today")
+        hashtags_raw = ""
+
+    print(f"OpenAI selected the following possible hashtags: {hashtags_raw.strip()}")
+    hashtags = hashtags_raw.strip().split(" ")
+
+    hashtags_selected = []
+    for hashtag in hashtags:
+        if hashtag.lower() in hashtag_options.keys():
+            if len(hashtags_selected) < 2:
+                hashtags_selected.append(hashtag)
+
+    return hashtags_selected
+
+
+def openai_article_prep(title, selftext_html):
+    title = remove_multiple_spaces_from_string(title)
+    text = remove_html_tags(selftext_html)
+
+    # openai seems to do better without any newlines
+    text = text.replace("\n", " ").replace("\r", "")
+    text = remove_multiple_spaces_from_string(text)
+
+    article = f"{title} ... {text}"
+    article_trim = article[:3600]  # leave ~400 characters for prompt, output, etc.
+    if article != article_trim:
+        article_trim += "... (continues)"
+
+    return article_trim
+
+
+def remove_multiple_spaces_from_string(input):
+    return " ".join(input.split())
+
+
+def remove_html_tags(text):
+    """Remove html tags from a string"""
+    import re
+
+    clean = re.compile("<.*?>")
+    return re.sub(clean, "", text)
 
 
 if __name__ == "__main__":
-    pprint(lambda_handler({"testing": True}, {}))
+    pprint(lambda_handler({}, {}))
