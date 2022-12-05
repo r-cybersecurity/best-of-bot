@@ -224,9 +224,9 @@ def tweet_maker(title, selftext_html):
         clean_token = token_to_clean.strip("#@")
         clean_tokens.append(clean_token)
 
-    hashtags = openai_hashtag_selector(title, selftext_html)
-    for hashtag in hashtags:
-        clean_tokens.append(hashtag)
+    # hashtags = openai_hashtag_selector(title, selftext_html)
+    # for hashtag in hashtags:
+    #    clean_tokens.append(hashtag)
 
     tweet = " ".join(clean_tokens)
     return tweet
