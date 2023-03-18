@@ -216,7 +216,9 @@ def submission_ranker(submission):
 
 def tweet_maker(title, selftext_html):
     # budget for tweets is 280 - 24 = 256 characters
-    tokens_to_clean = title.split(" ")
+    summary = openai_summary_generator(title, selftext_html)
+
+    tokens_to_clean = summary.split(" ")
 
     clean_tokens = []
     for token_to_clean in tokens_to_clean:
@@ -224,53 +226,37 @@ def tweet_maker(title, selftext_html):
         clean_token = token_to_clean.strip("#@")
         clean_tokens.append(clean_token)
 
-    # hashtags = openai_hashtag_selector(title, selftext_html)
-    # for hashtag in hashtags:
-    #    clean_tokens.append(hashtag)
-
     tweet = " ".join(clean_tokens)
     return tweet
 
 
-def openai_hashtag_selector(title, selftext_html):
+def openai_summary_generator(title, selftext_html):
     with open("permitted_hashtags.json") as hashtags_file:
         hashtag_options = json.load(hashtags_file)
 
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
-    article = openai_article_prep(title, selftext_html)
-
-    openai_prompt = f'You are an industry leader in the cybersecurity field who is great at summarizing information. What hashtags would you use on Twitter to describe the following article?\n\nArticle: "{article}"\nHashtags:'
-
-    openai_response_raw = openai.Completion.create(
-        model="text-davinci-002",
-        prompt=openai_prompt,
-        temperature=0,
-        max_tokens=60,
-        top_p=1.0,
-        frequency_penalty=0.5,
-        presence_penalty=0.0,
-    )
-
     try:
-        hashtags_raw = openai_response_raw["choices"][0]["text"]
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Summarize every Reddit discussion post you are given in 256 chracters or less. Avoid any use of hashtags, expletives, or discriminatory language.",
+                },
+                {"role": "user", "content": openai_post_prep(title, selftext_html)},
+            ],
+        )
+
+        summary = completion["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"OpenAI threw exception {str(e)}, no hashtags today")
-        hashtags_raw = ""
+        print(f"OpenAI threw exception {str(e)}, no summary today")
+        summary = ""
 
-    print(f"OpenAI selected the following possible hashtags: {hashtags_raw.strip()}")
-    hashtags = hashtags_raw.strip().split(" ")
-
-    hashtags_selected = []
-    for hashtag in hashtags:
-        if hashtag.lower() in hashtag_options.keys():
-            if len(hashtags_selected) < 2:
-                hashtags_selected.append(hashtag)
-
-    return hashtags_selected
+    return summary
 
 
-def openai_article_prep(title, selftext_html):
+def openai_post_prep(title, selftext_html):
     title = remove_multiple_spaces_from_string(title)
     text = remove_html_tags(selftext_html)
 
