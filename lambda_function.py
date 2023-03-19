@@ -242,7 +242,7 @@ def openai_summary_generator(title, selftext_html):
             messages=[
                 {
                     "role": "system",
-                    "content": "Summarize every Reddit discussion post you are given in 256 chracters or less. Avoid any use of hashtags, expletives, or discriminatory language.",
+                    "content": "Summarize every Reddit discussion post you are given in 240 chracters or less. Avoid any use of hashtags, expletives, or discriminatory language.",
                 },
                 {"role": "user", "content": openai_post_prep(title, selftext_html)},
             ],
