@@ -231,9 +231,6 @@ def tweet_maker(title, selftext_html):
 
 
 def openai_summary_generator(title, selftext_html):
-    with open("permitted_hashtags.json") as hashtags_file:
-        hashtag_options = json.load(hashtags_file)
-
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     try:
