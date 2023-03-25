@@ -9,6 +9,7 @@ import tweepy
 from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
+from mastodon import Mastodon
 
 
 rank_settings = {
@@ -88,14 +89,14 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": "No qualifying submissions found."}
 
     attempts = 0
-    tweeted = False
+    posted = False
     disqualified_submissions = []
 
-    while attempts < len(qualifying_submissions) and not tweeted:
+    while attempts < len(qualifying_submissions) and not posted:
         attempts += 1
         stored_submission = {"priority": 0}
 
-        # identify which submission we want to tweet the most
+        # identify which submission we want to post the most
         for submission in qualifying_submissions:
             if not submission["link"] in disqualified_submissions:
                 if submission["priority"] > stored_submission["priority"]:
@@ -104,7 +105,7 @@ def lambda_handler(event, context):
         disqualified_submissions.append(stored_submission["link"])
         print(str(stored_submission["priority"]) + " " + stored_submission["link"])
 
-        # check in DynamoDB if the submission has been tweeted
+        # check in DynamoDB if the submission has been posted
         dynamo_get = []
         try:
             dynamo_get = client.get_item(
@@ -113,19 +114,19 @@ def lambda_handler(event, context):
             )
         except ClientError as e:
             print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
-            # we don't know if we've tweeted this, so let's skip it
-            # this enforces at most once tweeting
+            # we don't know if we've posted this, so let's skip it
+            # this enforces at most once posting
             continue
         except NoCredentialsError:
             # local devel without access to DDB, just keep going
             pass
 
-        # we've confidently tweeted the submission, skip it
+        # we've confidently posted the submission, skip it
         if "Item" in dynamo_get:
-            print("-- already tweeted, skipping")
+            print("-- already posted, skipping")
             continue
 
-        # we haven't tweeted the submission, try logging that we'll tweet it
+        # we haven't posted the submission, try logging that we'll post it
         expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
         try:
             client.put_item(
@@ -135,7 +136,7 @@ def lambda_handler(event, context):
         except ClientError as e:
             print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
             # we don't know if we've saved this, so let's skip it
-            # this enforces at most once tweeting
+            # this enforces at most once posting
             continue
         except NoCredentialsError:
             # local devel without access to DDB, just keep going
@@ -143,25 +144,45 @@ def lambda_handler(event, context):
         except Exception as e:
             print(e)
             # we don't know if we've saved this, so let's skip it
-            # this enforces at most once tweeting
+            # this enforces at most once posting
             continue
 
-        print("-- attempting tweet")
-
+        print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
 
-        tweet_text = tweet_maker(title, selftext_html)
+        post_text = post_maker(title, selftext_html)
 
         # shorten link by removing title component
         # still always counts as 23 characters though
         post_id = stored_submission["link"].strip("/").split("/")[3]
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
-        tweet = f"{tweet_text} {post_link}"
-        print(f"Tweeting: '{tweet}'")
+        post_me = f"{post_text} {post_link}"
+        print(f"Planned post: '{post_me}'")
+
+        print("-- attempting toot")
+
+
+        MASTO_CLIENT_KEY = os.getenv("MASTO_CLIENT_KEY")
+        MASTO_CLIENT_SECRET = os.getenv("MASTO_CLIENT_SECRET")
+        MASTO_ACCESS_TOKEN = os.getenv("MASTO_ACCESS_TOKEN")
+
+        if MASTO_CLIENT_KEY and MASTO_CLIENT_SECRET and MASTO_ACCESS_TOKEN:
+            mastodon = Mastodon(
+                api_base_url="https://botsin.space",
+                client_id=MASTO_CLIENT_KEY,
+                client_secret=MASTO_CLIENT_SECRET,
+                access_token=MASTO_ACCESS_TOKEN,
+            )
+            mastodon.toot(post_me)
+            posted = True
+        else:
+            print("-- environment variables not present to toot")
+
+        print("-- attempting tweet")
 
         CONSUMER_KEY = os.getenv("CONSUMER_KEY")
         CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
@@ -174,15 +195,15 @@ def lambda_handler(event, context):
             auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
             auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
             api = tweepy.API(auth)
-            api.update_status(status=tweet)
-            tweeted = True
+            api.update_status(status=post_me)
+            posted = True
         else:
             print("-- environment variables not present to tweet")
 
-    if tweeted:
-        return {"statusCode": 200, "body": "Tweeted successfully."}
-    if not tweeted:
-        return {"statusCode": 200, "body": "Exhausted all options for tweeting."}
+    if posted:
+        return {"statusCode": 200, "body": "Posted successfully."}
+    if not posted:
+        return {"statusCode": 200, "body": "Exhausted all options for posting."}
 
 
 def submission_ranker(submission):
@@ -214,8 +235,9 @@ def submission_ranker(submission):
     }
 
 
-def tweet_maker(title, selftext_html):
+def post_maker(title, selftext_html):
     # budget for tweets is 280 - 24 = 256 characters
+    # mastodon is 500 (adjustable) but we have to use minimums here
     summary = openai_summary_generator(title, selftext_html)
 
     tokens_to_clean = summary.split(" ")
@@ -226,8 +248,8 @@ def tweet_maker(title, selftext_html):
         clean_token = token_to_clean.strip("#@")
         clean_tokens.append(clean_token)
 
-    tweet = " ".join(clean_tokens)
-    return tweet
+    post = " ".join(clean_tokens)
+    return post
 
 
 def openai_summary_generator(title, selftext_html):
