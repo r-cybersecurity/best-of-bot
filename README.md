@@ -1,11 +1,16 @@
-# "Best Of" r/cybersecurity Twitter Bot
+# "Best Of" r/cybersecurity Bot
 
 [![License](https://img.shields.io/github/license/r-cybersecurity/best-of-bot)](https://github.com/r-cybersecurity/best-of-bot)
 [![Code Style](https://img.shields.io/badge/code%20style-black-black)](https://github.com/psf/black)
 
-This bot reads the 25 most popular tweets from [r/cybersecurity](https://reddit.com/r/cybersecurity), applies some logic to prioritize and filter them (by topic, number of comments, karma, and karma ratio), selects a unique and not-yet-posted thread, summarizes the post, and then tweets the summary+link via [Tweepy](https://www.tweepy.org/). This creates an approximate list of the "best of r/cybersecurity" posts.
+This bot reads the 25 most popular posts from [r/cybersecurity](https://reddit.com/r/cybersecurity), applies some logic to prioritize and filter them (by topic, number of comments, karma, and karma ratio), selects a unique and not-yet-posted thread, summarizes the post, and then posts the summary+link to supported platforms. This creates an approximate list of the "best of r/cybersecurity" posts.
 
-This follows a philosophy of "less is more" - some days there are only a handful of great posts/great discussions, and we'd prefer *not* to tweet if it may be a quieter day on the subreddit.
+This follows a philosophy of "less is more" - some days there are only a handful of great posts/great discussions, and we'd prefer *not* to promote a less-exciting post if it may be a quieter day on the subreddit.
+
+Best of r/cybersecurity bots can be found on the following platforms:
+
+* Mastodon: https://botsin.space/@r_cybersecurity (has a higher text limit)
+* Twitter: https://twitter.com/r_cybersecurity
 
 ### How Does it Work?
 
@@ -13,9 +18,9 @@ The contents of this repository are an AWS Lambda function. The Lambda function 
 
 Then for each post, in descending order of priority, it checks in DynamoDB to see if there is a record of this being tweeted already. If it was, it skips to the next post. If it wasn't, it adds an entry to DynamoDB stating what is being posted, with a TTL of two weeks (so we automatically forget what was posted after there's no more chance for it to appear in Reddit's hot posts list - keeping costs from ballooning). The choices made in the DynamoDB logic ensure that this bot will post *at-most-once* - there may be cases where a tweet is saved to DynamoDB, but is not actually tweeted. We prefer that instead of at-least-once delivery (which could make duplicate tweets).
 
-Once a post has been selected to tweet, a short summary is generated using OpenAI's GPT-3.5-Turbo model, allowing people to know what they're clicking on from Twitter (and boost relevance, searchability, etc. of the bot itself).
+Once a post has been selected to promote on the "best of" bot accounts, a short summary is generated using OpenAI's GPT-3.5-Turbo model, allowing people to know what they're clicking on from Twitter (and boost relevance, searchability, etc. of the bot itself). If the summary is too long for certain platforms (cough, Twitter), it will fall back to the post title for those platforms only; if the post title is too long, it will fall back to just posting the link. All posts are sanitized to remove hashtags and @ signs before posting to avoid tagging people, companies, etc.
 
-Once a tweet has been made, the Lambda function exits - and if no tweets are made, it quits gracefully as well. For any errors encountered the function may try to gracefully continue, but if that is not possible it will error out, triggering SNS to ping the moderation staff to investigate the issue.
+Once a post has been made to each supported platform (of we've exhausted our retries for that platform), the Lambda function exits - and if no posts are made, it quits gracefully as well. For any errors encountered the function may try to gracefully continue, but if that is not possible it will error out, triggering SNS to ping the moderation staff to investigate the issue.
 
 ### Program Layout
 

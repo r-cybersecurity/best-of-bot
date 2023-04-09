@@ -153,37 +153,47 @@ def lambda_handler(event, context):
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
 
-        post_text = post_maker(title, selftext_html)
+        summary = summarize(title, selftext_html)
 
         # shorten link by removing title component
         # still always counts as 23 characters though
         post_id = stored_submission["link"].strip("/").split("/")[3]
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
-        post_me = f"{post_text} {post_link}"
-        print(f"Planned post: '{post_me}'")
+        post_engine(post_toot, summary, title, post_link)
+        post_engine(post_tweet, summary, title, post_link)
 
-        print("-- attempting toot")
+    if posted:
+        return {"statusCode": 200, "body": "Posted successfully."}
+    if not posted:
+        return {"statusCode": 200, "body": "Exhausted all options for posting."}
 
 
-        MASTO_CLIENT_KEY = os.getenv("MASTO_CLIENT_KEY")
-        MASTO_CLIENT_SECRET = os.getenv("MASTO_CLIENT_SECRET")
-        MASTO_ACCESS_TOKEN = os.getenv("MASTO_ACCESS_TOKEN")
+def post_engine(target, summary, title, link):
+    prioritized_posts = [f"{summary} {link}", f"{title} {link}", f"{link}"]
+    succeeded = False
+    for post in prioritized_posts:
+        clean_post = clean_tokens(post)
+        if not succeeded:
+            succeeded = target(clean_post)
 
-        if MASTO_CLIENT_KEY and MASTO_CLIENT_SECRET and MASTO_ACCESS_TOKEN:
-            mastodon = Mastodon(
-                api_base_url="https://botsin.space",
-                client_id=MASTO_CLIENT_KEY,
-                client_secret=MASTO_CLIENT_SECRET,
-                access_token=MASTO_ACCESS_TOKEN,
-            )
-            mastodon.toot(post_me)
-            posted = True
-        else:
-            print("-- environment variables not present to toot")
 
-        print("-- attempting tweet")
+def clean_tokens(text_data):
+    tokens_to_clean = text_data.split(" ")
 
+    clean_tokens = []
+    for token_to_clean in tokens_to_clean:
+        # could also ensure no cashtags?
+        clean_token = token_to_clean.strip("#@")
+        clean_tokens.append(clean_token)
+
+    return " ".join(clean_tokens)
+
+
+def post_tweet(post_me):
+    print("-- attempting tweet")
+
+    try:
         CONSUMER_KEY = os.getenv("CONSUMER_KEY")
         CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
         ACCESS_KEY = os.getenv("ACCESS_KEY")
@@ -196,14 +206,39 @@ def lambda_handler(event, context):
             auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
             api = tweepy.API(auth)
             api.update_status(status=post_me)
-            posted = True
+            print(f"-- tweeted {post_me}")
+            return True
         else:
             print("-- environment variables not present to tweet")
+            return False
+    except Exception as e:
+        print(f"-- tweet caused exception {str(e)}")
+        return False
 
-    if posted:
-        return {"statusCode": 200, "body": "Posted successfully."}
-    if not posted:
-        return {"statusCode": 200, "body": "Exhausted all options for posting."}
+
+def post_toot(post_me):
+    print("-- attempting toot")
+
+    try:
+        MASTO_CLIENT_KEY = os.getenv("MASTO_CLIENT_KEY")
+        MASTO_CLIENT_SECRET = os.getenv("MASTO_CLIENT_SECRET")
+        MASTO_ACCESS_TOKEN = os.getenv("MASTO_ACCESS_TOKEN")
+
+        if MASTO_CLIENT_KEY and MASTO_CLIENT_SECRET and MASTO_ACCESS_TOKEN:
+            mastodon = Mastodon(
+                api_base_url="https://botsin.space",
+                client_id=MASTO_CLIENT_KEY,
+                client_secret=MASTO_CLIENT_SECRET,
+                access_token=MASTO_ACCESS_TOKEN,
+            )
+            mastodon.toot(post_me)
+            print(f"-- tooted {post_me}")
+            return True
+        else:
+            print("-- environment variables not present to toot")
+    except Exception as e:
+        print(f"-- toot caused exception {str(e)}")
+        return False
 
 
 def submission_ranker(submission):
@@ -235,24 +270,9 @@ def submission_ranker(submission):
     }
 
 
-def post_maker(title, selftext_html):
+def summarize(title, selftext_html):
     # budget for tweets is 280 - 24 = 256 characters
     # mastodon is 500 (adjustable) but we have to use minimums here
-    summary = openai_summary_generator(title, selftext_html)
-
-    tokens_to_clean = summary.split(" ")
-
-    clean_tokens = []
-    for token_to_clean in tokens_to_clean:
-        # could also ensure no cashtags?
-        clean_token = token_to_clean.strip("#@")
-        clean_tokens.append(clean_token)
-
-    post = " ".join(clean_tokens)
-    return post
-
-
-def openai_summary_generator(title, selftext_html):
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     try:
@@ -261,7 +281,7 @@ def openai_summary_generator(title, selftext_html):
             messages=[
                 {
                     "role": "system",
-                    "content": "You will be given a discussion post from Reddit which is about cybersecurity. Summarize the post in 230 chracters or less. Avoid any use of hashtags, expletives, or discriminatory language.",
+                    "content": "You will be given a discussion post from Reddit which is about cybersecurity. Summarize the post in 230 chracters or less, using only the information present in the post. Avoid any use of hashtags. Explicit language is OK as long as it's not discriminatory. If you cannot summarize the post for any reason, reply 'uavrcl'.",
                 },
                 {"role": "user", "content": openai_post_prep(title, selftext_html)},
             ],
@@ -271,6 +291,9 @@ def openai_summary_generator(title, selftext_html):
     except Exception as e:
         print(f"OpenAI threw exception {str(e)}, no summary today")
         summary = ""
+
+    if "uavrcl" in summary:
+        summary = title
 
     return summary
 
