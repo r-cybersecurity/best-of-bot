@@ -293,7 +293,9 @@ def summarize(title, selftext_html):
         return title
 
     if "uavrcl" in summary.lower():
-        print(f"The keyword 'uavrcl' was found in the summary, disqualifying the summary: {summary}")
+        print(
+            f"The keyword 'uavrcl' was found in the summary, disqualifying the summary: {summary}"
+        )
         return title
 
     try:
@@ -314,11 +316,15 @@ def summarize(title, selftext_html):
         return title
 
     if "uavrcl" in sorry.lower():
-        print(f"The keyword 'uavrcl' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}")
+        print(
+            f"The keyword 'uavrcl' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
+        )
         return title
-    
+
     if "sorry" in sorry.lower():
-        print(f"The keyword 'sorry' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}")
+        print(
+            f"The keyword 'sorry' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
+        )
         return title
 
     return summary
