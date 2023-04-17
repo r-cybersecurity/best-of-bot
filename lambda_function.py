@@ -321,9 +321,9 @@ def summarize(title, selftext_html):
         )
         return title
 
-    if "sorry" in sorry.lower():
+    if "sorry" in sorry.lower() or "apolog" in sorry.lower():
         print(
-            f"The keyword 'sorry' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
+            f"The keyword 'sorry' or 'apolog' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
         )
         return title
 
