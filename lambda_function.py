@@ -290,10 +290,36 @@ def summarize(title, selftext_html):
         summary = completion["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"OpenAI threw exception {str(e)}, no summary today")
-        summary = ""
+        return title
 
-    if "uavrcl" in summary:
-        summary = title
+    if "uavrcl" in summary.lower():
+        print(f"The keyword 'uavrcl' was found in the summary, disqualifying the summary: {summary}")
+        return title
+
+    try:
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You will be given a Tweet. If the Tweet is an apology or has an apologetic tone, reply 'uavrcl'. If the Tweet is not an apology and does not have an apologetic tone, reply 'I am content'.",
+                },
+                {"role": "user", "content": summary},
+            ],
+        )
+
+        sorry = completion["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"OpenAI threw exception {str(e)}, no summary today")
+        return title
+
+    if "uavrcl" in sorry.lower():
+        print(f"The keyword 'uavrcl' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}")
+        return title
+    
+    if "sorry" in sorry.lower():
+        print(f"The keyword 'sorry' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}")
+        return title
 
     return summary
 
