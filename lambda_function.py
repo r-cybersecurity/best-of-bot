@@ -1,3 +1,4 @@
+import atprototools
 import boto3
 import json
 import os
@@ -161,6 +162,7 @@ def lambda_handler(event, context):
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
         post_engine(post_toot, summary, title, post_link)
+        post_engine(post_skeet, summary, title, post_link)
         post_engine(post_tweet, summary, title, post_link)
 
     if posted:
@@ -238,6 +240,25 @@ def post_toot(post_me):
             print("-- environment variables not present to toot")
     except Exception as e:
         print(f"-- toot caused exception {str(e)}")
+        return False
+
+
+def post_skeet(post_me):
+    print("-- attempting skeet")
+
+    try:
+        BSKY_USERNAME = os.getenv("BSKY_USERNAME")
+        BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
+
+        if BSKY_USERNAME and BSKY_PASSWORD:
+            atp = atprototools.Session(BSKY_USERNAME, BSKY_PASSWORD)
+            atp.postBloot(post_me)
+            print(f"-- skeeted {post_me}")
+            return True
+        else:
+            print("-- environment variables not present to skeet")
+    except Exception as e:
+        print(f"-- skeet caused exception {str(e)}")
         return False
 
 

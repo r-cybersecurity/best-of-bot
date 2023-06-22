@@ -9,7 +9,8 @@ This follows a philosophy of "less is more" - some days there are only a handful
 
 Best of r/cybersecurity bots can be found on the following platforms:
 
-* Mastodon: https://botsin.space/@r_cybersecurity (has a higher text limit)
+* Mastodon: https://botsin.space/@r_cybersecurity
+* Bluesky: https://bsky.app/profile/cybersecurity.page
 * Twitter: https://twitter.com/r_cybersecurity
 
 ### How Does it Work?
