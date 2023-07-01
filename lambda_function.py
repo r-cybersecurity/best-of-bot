@@ -225,7 +225,8 @@ def post_skeet(post_me):
         BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
 
         if BSKY_USERNAME and BSKY_PASSWORD:
-            client = Client.login(BSKY_USERNAME, BSKY_PASSWORD)
+            client = Client()
+            client.login(BSKY_USERNAME, BSKY_PASSWORD)
             reddit_url = post_me.split(" ")[-1]
             external_link = External(uri=reddit_url)
             client.send_post(text=post_me, extern=external_link)
