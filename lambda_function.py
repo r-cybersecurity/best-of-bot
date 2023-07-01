@@ -228,8 +228,8 @@ def post_skeet(post_me):
             client = Client()
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
             reddit_url = post_me.split(" ")[-1]
-            external_link = External(uri=reddit_url)
-            client.send_post(text=post_me, extern=external_link)
+            external_link = External(uri=reddit_url, description="It's a link?", title="(link)")
+            client.send_post(text=post_me, embed=external_link)
             print(f"-- skeeted {post_me}")
             return True
         else:
