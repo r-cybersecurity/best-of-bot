@@ -1,4 +1,4 @@
-import atprototools
+
 import boto3
 import json
 import os
@@ -6,7 +6,8 @@ import openai
 import random
 import requests
 import time
-import tweepy
+from atproto import Client
+from atproto.xrpc_client.models.app.bsky.embed.external import External
 from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
@@ -163,7 +164,6 @@ def lambda_handler(event, context):
 
         post_engine(post_toot, summary, title, post_link)
         post_engine(post_skeet, summary, title, post_link)
-        post_engine(post_tweet, summary, title, post_link)
 
     if posted:
         return {"statusCode": 200, "body": "Posted successfully."}
@@ -190,32 +190,6 @@ def clean_tokens(text_data):
         clean_tokens.append(clean_token)
 
     return " ".join(clean_tokens)
-
-
-def post_tweet(post_me):
-    print("-- attempting tweet")
-
-    try:
-        CONSUMER_KEY = os.getenv("CONSUMER_KEY")
-        CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
-        ACCESS_KEY = os.getenv("ACCESS_KEY")
-        ACCESS_SECRET = os.getenv("ACCESS_SECRET")
-
-        if CONSUMER_KEY and CONSUMER_SECRET and ACCESS_KEY and ACCESS_SECRET:
-            # failing here is good -
-            # we could unecessarily PUT all other potential tweets otherwise
-            auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
-            auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
-            api = tweepy.API(auth)
-            api.update_status(status=post_me)
-            print(f"-- tweeted {post_me}")
-            return True
-        else:
-            print("-- environment variables not present to tweet")
-            return False
-    except Exception as e:
-        print(f"-- tweet caused exception {str(e)}")
-        return False
 
 
 def post_toot(post_me):
@@ -251,8 +225,10 @@ def post_skeet(post_me):
         BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
 
         if BSKY_USERNAME and BSKY_PASSWORD:
-            atp = atprototools.Session(BSKY_USERNAME, BSKY_PASSWORD)
-            atp.postBloot(post_me)
+            client = Client.login(BSKY_USERNAME, BSKY_PASSWORD)
+            reddit_url = post_me.split(" ")[-1]
+            external_link = External(uri=reddit_url)
+            client.send_post(text=post_me, extern=external_link)
             print(f"-- skeeted {post_me}")
             return True
         else:

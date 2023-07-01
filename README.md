@@ -11,15 +11,16 @@ Best of r/cybersecurity bots can be found on the following platforms:
 
 * Mastodon: https://botsin.space/@r_cybersecurity
 * Bluesky: https://bsky.app/profile/cybersecurity.page
-* Twitter: https://twitter.com/r_cybersecurity
+
+Our Twitter bot was killed due to [Twitter's recent API changes](https://mashable.com/article/twitter-good-bot-purge-makeitaquote-hourly-animal-accounts), and we will not return to the platform. For those that followed the bot there, you will need to find another platform to follow the bot on.
 
 ### How Does it Work?
 
 The contents of this repository are an AWS Lambda function. The Lambda function is called by EventBridge every hour, to check the top posts on the subreddit. It then prioritizes and filters them with the aforementioned checks.
 
-Then for each post, in descending order of priority, it checks in DynamoDB to see if there is a record of this being tweeted already. If it was, it skips to the next post. If it wasn't, it adds an entry to DynamoDB stating what is being posted, with a TTL of two weeks (so we automatically forget what was posted after there's no more chance for it to appear in Reddit's hot posts list - keeping costs from ballooning). The choices made in the DynamoDB logic ensure that this bot will post *at-most-once* - there may be cases where a tweet is saved to DynamoDB, but is not actually tweeted. We prefer that instead of at-least-once delivery (which could make duplicate tweets).
+Then for each post, in descending order of priority, it checks in DynamoDB to see if there is a record of this being shared already. If it was, it skips to the next post. If it wasn't, it adds an entry to DynamoDB stating what is being posted, with a TTL of two weeks (so we automatically forget what was posted after there's no more chance for it to appear in Reddit's hot posts list - keeping costs from ballooning). The choices made in the DynamoDB logic ensure that this bot will post *at-most-once* - there may be cases where a shared post is saved to DynamoDB, but is not actually shared on all platforms. We prefer that instead of at-least-once delivery (which could make duplicate posts).
 
-Once a post has been selected to promote on the "best of" bot accounts, a short summary is generated using OpenAI's GPT-3.5-Turbo model, allowing people to know what they're clicking on from Twitter (and boost relevance, searchability, etc. of the bot itself). If the summary is too long for certain platforms (cough, Twitter), it will fall back to the post title for those platforms only; if the post title is too long, it will fall back to just posting the link. All posts are sanitized to remove hashtags and @ signs before posting to avoid tagging people, companies, etc.
+Once a post has been selected to promote on the "best of" bot accounts, a short summary is generated using OpenAI's GPT-3.5-Turbo model, allowing people to know what they're clicking on from other platforms (and boost relevance, searchability, etc. of the bot itself). If the summary is too long for certain platforms, it will fall back to the post title for those platforms only; if the post title is too long, it will fall back to just posting the link. All posts are sanitized to remove hashtags and @ signs before posting to avoid tagging people, companies, etc.
 
 Once a post has been made to each supported platform (of we've exhausted our retries for that platform), the Lambda function exits - and if no posts are made, it quits gracefully as well. For any errors encountered the function may try to gracefully continue, but if that is not possible it will error out, triggering SNS to ping the moderation staff to investigate the issue.
 

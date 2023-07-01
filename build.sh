@@ -4,7 +4,7 @@
 rm -rf deploy_me.zip package
 
 # install dependencies
-pip install --target ./package urllib3==1.26.0 requests tweepy typing_extensions Mastodon.py atprototools
+pip install --target ./package urllib3==1.26.0 requests typing_extensions Mastodon.py atproto
 pip install --no-deps --target ./package openai
 
 # build zip with all data
