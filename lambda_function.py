@@ -7,7 +7,7 @@ import random
 import requests
 import time
 from atproto import Client
-from atproto.xrpc_client.models.app.bsky.embed.external import External
+from atproto.xrpc_client.models import AppBskyEmbedExternal
 from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
@@ -172,12 +172,12 @@ def lambda_handler(event, context):
 
 
 def post_engine(target, summary, title, link):
-    prioritized_posts = [f"{summary} {link}", f"{title} {link}", f"{link}"]
+    prioritized_posts = [f"{summary}", f"{title}", ""]
     succeeded = False
     for post in prioritized_posts:
         clean_post = clean_tokens(post)
         if not succeeded:
-            succeeded = target(clean_post)
+            succeeded = target(clean_post, link)
 
 
 def clean_tokens(text_data):
@@ -192,8 +192,9 @@ def clean_tokens(text_data):
     return " ".join(clean_tokens)
 
 
-def post_toot(post_me):
+def post_toot(post, link):
     print("-- attempting toot")
+    post_me = f"{post} {link}"
 
     try:
         MASTO_CLIENT_KEY = os.getenv("MASTO_CLIENT_KEY")
@@ -217,7 +218,7 @@ def post_toot(post_me):
         return False
 
 
-def post_skeet(post_me):
+def post_skeet(post, link):
     print("-- attempting skeet")
 
     try:
@@ -227,10 +228,9 @@ def post_skeet(post_me):
         if BSKY_USERNAME and BSKY_PASSWORD:
             client = Client()
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
-            reddit_url = post_me.split(" ")[-1]
-            external_link = External(uri=reddit_url, description="It's a link. In a post. It doesn't need a description.", title=reddit_url)
-            client.send_post(text=post_me, embed=external_link)
-            print(f"-- skeeted {post_me}")
+            external_link = AppBskyEmbedExternal.External(uri=link, description="View discussion on Reddit.", title="r/cybersecurity")
+            client.send_post(text=post, embed=AppBskyEmbedExternal.Main(external=external_link))
+            print(f"-- skeeted {post}")
             return True
         else:
             print("-- environment variables not present to skeet")
@@ -269,7 +269,7 @@ def submission_ranker(submission):
 
 
 def summarize(title, selftext_html):
-    # budget for tweets is 280 - 24 = 256 characters
+    # budget for skeets is 300 characters
     # mastodon is 500 (adjustable) but we have to use minimums here
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -279,7 +279,7 @@ def summarize(title, selftext_html):
             messages=[
                 {
                     "role": "system",
-                    "content": "You will be given a discussion post from Reddit which is about cybersecurity. Summarize the post in 230 chracters or less, using only the information present in the post. Avoid any use of hashtags. Explicit language is OK as long as it's not discriminatory. If you cannot summarize the post for any reason, reply 'uavrcl'.",
+                    "content": "You will be given a discussion post from Reddit which is about cybersecurity. Summarize the post in 280 chracters or less, using only the information present in the post. Avoid any use of hashtags. Explicit language is OK as long as it's not discriminatory. If you cannot summarize the post for any reason, reply 'uavrcl'.",
                 },
                 {"role": "user", "content": openai_post_prep(title, selftext_html)},
             ],
