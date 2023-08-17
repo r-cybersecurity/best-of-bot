@@ -149,6 +149,8 @@ def lambda_handler(event, context):
             # this enforces at most once posting
             continue
 
+        posted = True
+
         print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
