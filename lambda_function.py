@@ -1,8 +1,7 @@
-
 import boto3
 import json
 import os
-import openai
+from openai import OpenAI
 import random
 import requests
 import time
@@ -230,8 +229,14 @@ def post_skeet(post, link):
         if BSKY_USERNAME and BSKY_PASSWORD:
             client = Client()
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
-            external_link = AppBskyEmbedExternal.External(uri=link, description="View discussion on Reddit.", title="r/cybersecurity")
-            client.send_post(text=post, embed=AppBskyEmbedExternal.Main(external=external_link))
+            external_link = AppBskyEmbedExternal.External(
+                uri=link,
+                description="View discussion on Reddit.",
+                title="r/cybersecurity",
+            )
+            client.send_post(
+                text=post, embed=AppBskyEmbedExternal.Main(external=external_link)
+            )
             print(f"-- skeeted {post}")
             return True
         else:
@@ -273,10 +278,10 @@ def submission_ranker(submission):
 def summarize(title, selftext_html):
     # budget for skeets is 300 characters
     # mastodon is 500 (adjustable) but we have to use minimums here
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     try:
-        completion = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {
@@ -299,7 +304,7 @@ def summarize(title, selftext_html):
         return title
 
     try:
-        completion = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {
