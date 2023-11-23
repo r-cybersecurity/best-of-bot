@@ -315,7 +315,7 @@ def summarize(title, selftext_html):
             ],
         )
 
-        sorry = completion["choices"][0]["message"]["content"]
+        sorry = completion.choices[0].message.content
     except Exception as e:
         print(f"OpenAI threw exception {str(e)}, no summary today")
         return title
