@@ -72,9 +72,11 @@ def lambda_handler(event, context):
     try:
         json_data = fetched_data.json()
     except Exception:
+        print(fetched_data)
         return {"statusCode": 500, "body": "Reddit did not return valid JSON"}
 
     if "data" not in json_data:
+        print(fetched_data)
         return {"statusCode": 500, "body": "JSON does not contain 'data' field."}
 
     try:
