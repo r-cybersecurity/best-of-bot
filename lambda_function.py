@@ -1,9 +1,7 @@
 import boto3
-import json
+import praw
 import os
 from openai import OpenAI
-import random
-import requests
 import time
 from atproto import Client
 from atproto.xrpc_client.models import AppBskyEmbedExternal
@@ -61,32 +59,26 @@ client = boto3.client("dynamodb")
 
 
 def lambda_handler(event, context):
-    url = "https://www.reddit.com/r/cybersecurity/hot/.json?count=25"
-    headers = {"User-Agent": "r/cybersecurity Twitter Bot"}
+    reddit = praw.Reddit(
+        client_id=os.getenv("PRAW_CLIENT_ID"),
+        client_secret=os.getenv("PRAW_CLIENT_SECRET"),
+        refresh_token=os.getenv("PRAW_REFRESH_TOKEN"),
+        user_agent="r/cybersecurity 'best of' bot",
+    )
+    reddit.read_only = True
 
-    try:
-        fetched_data = requests.get(url, headers=headers)
-    except Exception:
-        return {"statusCode": 500, "body": "Couldn't GET Reddit"}
+    qualifying_submissions = []
+    for submission in reddit.subreddit("cybersecurity").hot(limit=25):
+        post_created_epoch = submission.created_utc
 
-    try:
-        json_data = fetched_data.json()
-    except Exception:
-        print(fetched_data)
-        return {"statusCode": 500, "body": "Reddit did not return valid JSON"}
+        if time.time() < post_created_epoch + (15 * 60):
+            # post is less than 15m old, strongly increases chance that the post
+            # is unmoderated, for ex. AutoMod may not run for 0-3m in typical use
+            continue
 
-    if "data" not in json_data:
-        print(fetched_data)
-        return {"statusCode": 500, "body": "JSON does not contain 'data' field."}
-
-    try:
-        qualifying_submissions = []
-        for submission in json_data["data"]["children"]:
-            submission_rank = submission_ranker(submission["data"])
-            if submission_rank:
-                qualifying_submissions.append(submission_rank)
-    except Exception as e:
-        return {"statusCode": 500, "body": f"Error while parsing submissions: {e}"}
+        submission_rank = submission_ranker(submission)
+        if submission_rank:
+            qualifying_submissions.append(submission_rank)
 
     if len(qualifying_submissions) == 0:
         return {"statusCode": 500, "body": "No qualifying submissions found."}
@@ -249,31 +241,36 @@ def post_skeet(post, link):
 
 
 def submission_ranker(submission):
-    if submission["over_18"] == True:
+    if submission.over_18 == True:
         return False
 
     try:
-        weights = rank_settings[submission["link_flair_text"]]
+        weights = rank_settings[submission.link_flair_text]
     except Exception:
         weights = rank_settings["Other"]
 
     priority = (
-        submission["upvote_ratio"]
-        * submission["upvote_ratio"]
-        * submission["ups"]
+        submission.upvote_ratio
+        * submission.upvote_ratio
+        * submission.score
         * weights["karma"]
-        * submission["num_comments"]
+        * submission.num_comments
         * weights["comments"]
     )
 
     if priority < 10:
         return False
 
+    selftext_html = ""
+    if isinstance(submission.selftext_html, str):
+        selftext_html = submission.selftext_html
+
     return {
         "priority": priority,
-        "link": submission["permalink"],
-        "title": submission["title"],
-        "flair": submission["link_flair_text"],
+        "link": submission.permalink,
+        "title": submission.title,
+        "flair": submission.link_flair_text,
+        "selftext_html": selftext_html,
     }
 
 
