@@ -192,13 +192,19 @@ def post_toot(post, link):
     post_me = f"{post} {link}"
 
     try:
+        MASTO_INSTANCE_URL = os.getenv("MASTO_INSTANCE_URL")
         MASTO_CLIENT_KEY = os.getenv("MASTO_CLIENT_KEY")
         MASTO_CLIENT_SECRET = os.getenv("MASTO_CLIENT_SECRET")
         MASTO_ACCESS_TOKEN = os.getenv("MASTO_ACCESS_TOKEN")
 
-        if MASTO_CLIENT_KEY and MASTO_CLIENT_SECRET and MASTO_ACCESS_TOKEN:
+        if (
+            MASTO_INSTANCE_URL
+            and MASTO_CLIENT_KEY
+            and MASTO_CLIENT_SECRET
+            and MASTO_ACCESS_TOKEN
+        ):
             mastodon = Mastodon(
-                api_base_url="https://botsin.space",
+                api_base_url=MASTO_INSTANCE_URL,
                 client_id=MASTO_CLIENT_KEY,
                 client_secret=MASTO_CLIENT_SECRET,
                 access_token=MASTO_ACCESS_TOKEN,
