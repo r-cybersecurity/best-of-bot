@@ -9,8 +9,8 @@ This follows a philosophy of "less is more" - some days there are only a handful
 
 Best of r/cybersecurity bots can be found on the following platforms:
 
-* Mastodon: https://botsin.space/@r_cybersecurity
-* Bluesky: https://bsky.app/profile/cybersecurity.page
+* Mastodon: [@r_cybersecurity@infosec.exchange](https://infosec.exchange/@r_cybersecurity)
+* Bluesky: [@cybersecurity.page](https://bsky.app/profile/cybersecurity.page)
 
 Our Twitter bot was killed due to [Twitter's recent API changes](https://mashable.com/article/twitter-good-bot-purge-makeitaquote-hourly-animal-accounts), and we will not return to the platform. For those that followed the bot there, you will need to find another platform to follow the bot on.
 
