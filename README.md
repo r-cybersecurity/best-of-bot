@@ -37,3 +37,9 @@ aws lambda update-function-code --function-name twitter_bot__r_cybersecurity --z
 ```
 
 Yes, the dependencies aren't pinned. No, this isn't automated and probably could be. It's a Twitter bot which is updated almost-never and has very little access to anything (worst thing is probably my OpenAI key), so it doesn't *really* matter.
+
+### Considerations
+
+Because this bot is oriented towards use in discussion-focused subreddits, it posts links directly to Reddit. When creating or running bots like this, it's important to be curteous to the communities you are posting to, so you do not spam them. For example, on Mastodon you should make posts unlisted so people can *choose to see* the bot's posts if they want to, but aren't spammed by the bot in public timelines.
+
+This bot is not a great choice if you're looking to post content from subreddits that act more as link aggregators, such as r/netsec. For those, check out my other project [Bring Link Aggregator Subreddits to the Fediverse](https://github.com/tweedge/xpost-reddit-to-fediverse).
