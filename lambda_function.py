@@ -284,10 +284,11 @@ def summarize(title, selftext_html):
     # budget for skeets is 300 characters
     # mastodon is 500 (adjustable) but we have to use minimums here
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    model = "gpt-4o"
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-4",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -310,7 +311,7 @@ def summarize(title, selftext_html):
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-4",
+            model=model,
             messages=[
                 {
                     "role": "system",
