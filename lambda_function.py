@@ -147,8 +147,10 @@ def lambda_handler(event, context):
         print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
+        context = "View post on Reddit."
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
+            context = selftext_html[:40] + "..."
 
         summary = summarize(title, selftext_html)
 
@@ -157,8 +159,8 @@ def lambda_handler(event, context):
         post_id = stored_submission["link"].strip("/").split("/")[3]
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
-        post_engine(post_toot, summary, title, post_link)
-        post_engine(post_skeet, summary, title, post_link)
+        post_engine(post_toot, summary, title, context, post_link)
+        post_engine(post_skeet, summary, title, context, post_link)
 
     if posted:
         return {"statusCode": 200, "body": "Posted successfully."}
@@ -166,13 +168,13 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": "Exhausted all options for posting."}
 
 
-def post_engine(target, summary, title, link):
+def post_engine(target, summary, title, context, link):
     prioritized_posts = [f"{summary}", f"{title}", ""]
     succeeded = False
     for post in prioritized_posts:
         clean_post = clean_tokens(post)
         if not succeeded:
-            succeeded = target(clean_post, link)
+            succeeded = target(clean_post, title, context, link)
 
 
 def clean_tokens(text_data):
@@ -187,7 +189,7 @@ def clean_tokens(text_data):
     return " ".join(clean_tokens)
 
 
-def post_toot(post, link):
+def post_toot(post, title, context, link):
     print("-- attempting toot")
     post_me = f"{post} {link}"
 
@@ -219,7 +221,7 @@ def post_toot(post, link):
         return False
 
 
-def post_skeet(post, link):
+def post_skeet(post, title, context, link):
     print("-- attempting skeet")
 
     try:
@@ -231,8 +233,8 @@ def post_skeet(post, link):
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
             external_link = AppBskyEmbedExternal.External(
                 uri=link,
-                description="View discussion on Reddit.",
-                title="r/cybersecurity",
+                description=context,
+                title=title,
             )
             client.send_post(
                 text=post, embed=AppBskyEmbedExternal.Main(external=external_link)
