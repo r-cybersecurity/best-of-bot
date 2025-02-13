@@ -150,7 +150,10 @@ def lambda_handler(event, context):
         context = "View post on Reddit."
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
-            context = selftext_html[:40] + "..."
+            if len(selftext_html) > 200:
+                context = selftext_html[:200] + "..."
+            else:
+                context = selftext_html
 
         summary = summarize(title, selftext_html)
 
