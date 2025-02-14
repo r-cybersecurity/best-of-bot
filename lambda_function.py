@@ -147,13 +147,16 @@ def lambda_handler(event, context):
         print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
-        context = "View post on Reddit."
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
-            if len(selftext_html) > 200:
-                context = selftext_html[:200] + "..."
+
+        context = "View post on Reddit."
+        if "selftext" in stored_submission.keys():
+            selftext = stored_submission["selftext"]
+            if len(selftext) > 200:
+                context = selftext[:200] + "..."
             else:
-                context = selftext_html
+                context = selftext
 
         summary = summarize(title, selftext_html)
 
