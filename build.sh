@@ -13,7 +13,7 @@ pip install \
     "cryptography<42"
 
 # install dependencies
-pip install --target ./package urllib3==1.26.0 typing_extensions Mastodon.py atproto==0.0.34 distro praw jiter
+pip install --target ./package urllib3==1.26.0 typing_extensions Mastodon.py atproto==0.0.34 distro praw jiter beautifulsoup4
 pip install --no-deps --target ./package openai
 
 # build zip with all data

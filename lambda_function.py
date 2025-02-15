@@ -9,6 +9,7 @@ from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
 from mastodon import Mastodon
+from bs4 import BeautifulSoup
 
 
 rank_settings = {
@@ -147,14 +148,20 @@ def lambda_handler(event, context):
         print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
+        context = "View post on Reddit."
+
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
 
-        context = "View post on Reddit."
-        if "selftext" in stored_submission.keys():
-            selftext = stored_submission["selftext"]
+            # clean irrelevant text from HTML
+            soup = BeautifulSoup(selftext_html, features="html.parser")
+            for script in soup(["script", "style", "div"]):
+                script.extract()
+
+            # get clean selftext
+            selftext = soup.get_text()
             if len(selftext) > 200:
-                context = selftext[:200] + "..."
+                context = selftext[:197] + "..."
             else:
                 context = selftext
 
