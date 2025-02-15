@@ -155,14 +155,16 @@ def lambda_handler(event, context):
 
             # clean irrelevant text from HTML
             soup = BeautifulSoup(selftext_html, features="html.parser")
-            for script in soup(["script", "style", "div"]):
+            for script in soup(["script", "style"]):
                 script.extract()
 
             # get clean selftext
             selftext = soup.get_text()
+
+            # use as link context
             if len(selftext) > 200:
                 context = selftext[:197] + "..."
-            else:
+            elif len(selftext) > 10:
                 context = selftext
 
         summary = summarize(title, selftext_html)
