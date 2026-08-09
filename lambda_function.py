@@ -310,19 +310,25 @@ def summarize(title, selftext_html, char_limit):
     model = "us.anthropic.claude-sonnet-4-6"
 
     system_prompt = (
-        "You produce summaries for cybersecurity news shared on Reddit's "
-        "r/cybersecurity community, written for people on Mastodon and Bluesky who are "
-        "not on Reddit. The pasted title and selftext point to an external article or "
-        "resource. Describe what that clicked-link actually covers, using only facts "
-        "present in the text, so someone off-Reddit can understand the topic and decide "
-        "whether to click. "
+        "You produce summaries for posts shared on Reddit's r/cybersecurity community, "
+        "written for people on Mastodon and Bluesky who are not on Reddit. The pasted "
+        "title and selftext are the Reddit post itself: either a shared external article "
+        "or a discussion post where the poster asks a question. "
+        "Your job is to help someone off-Reddit understand what the post is about and "
+        "decide whether to click through. "
+        "If the post is a question or discussion, summarize the question and the "
+        "discussion the poster is raising - what the poster is asking and the key points "
+        "or context of the debate - NOT any answer. Do not answer the question yourself "
+        "and do not let the summary read as a definitive verdict; present it as an "
+        "open question/discussion. "
+        "If the post links to an external article or resource, describe what that "
+        "clicked-link actually covers, using only facts present in the text. "
         "Lead with the most newsworthy, concrete detail (for example the affected "
         "software or CVE, the attacker, the vulnerability class, or the regulatory or "
         "business impact). "
-        "Do not simply repeat, quote, or paraphrase what the Reddit poster wrote; do not "
-        "summarize Reddit discussion. "
+        "Use only facts present in the text. "
         "Avoid hashtags, emoji, filler openers ('Here is...', 'This post is...', 'I'm "
-        "sorry, I don't understand'), questions, and meta-commentary. "
+        "sorry, I don't understand'), and meta-commentary. "
         "Explicit language is OK as long as it is not discriminatory. "
         f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
         "characters or fewer."
@@ -333,8 +339,8 @@ def summarize(title, selftext_html, char_limit):
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 1024,
+        "system": system_prompt,
         "messages": [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
     }
@@ -374,12 +380,7 @@ def post_prep(title, selftext_html):
     text = text.replace("\n", " ").replace("\r", "")
     text = remove_multiple_spaces_from_string(text)
 
-    article = f"{title} ... {text}"
-    article_trim = article[:3600]  # leave ~400 characters for prompt, output, etc.
-    if article != article_trim:
-        article_trim += "... (continues)"
-
-    return article_trim
+    return f"{title} ... {text}"
 
 
 def remove_multiple_spaces_from_string(input):
