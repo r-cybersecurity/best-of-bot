@@ -167,12 +167,14 @@ def lambda_handler(event, context):
             elif len(selftext) > 10:
                 context = selftext
 
-        # Mastodon supports up to 500 characters but we leave headroom for the
-        # link and trailing whitespace, so cap the summary lower.
-        toot_summary = summarize(title, selftext_html, 470)
+        # Mastodon counts URLs as a fixed 23 characters regardless of length, and
+        # the link is appended with a leading space, so the summary has 24 chars of
+        # headroom against the default 500-char limit.
+        toot_summary = summarize(title, selftext_html, 476)
 
-        # Bluesky caps posts at 300 characters, so cap the summary lower.
-        skeet_summary = summarize(title, selftext_html, 270)
+        # Bluesky caps posts at 300 characters. The link lives in the embed card,
+        # not the post text, so the summary can use the full limit.
+        skeet_summary = summarize(title, selftext_html, 300)
 
         # shorten link by removing title component
         # still always counts as 23 characters though
@@ -330,33 +332,11 @@ def summarize(title, selftext_html, char_limit):
         "Avoid hashtags, emoji, filler openers ('Here is...', 'This post is...', 'I'm "
         "sorry, I don't understand'), and meta-commentary. "
         "Explicit language is OK as long as it is not discriminatory. "
-        f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
-        "characters or fewer."
     )
 
     user_content = post_prep(title, selftext_html)
 
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
-        "system": system_prompt,
-        "messages": [
-            {"role": "user", "content": user_content},
-        ],
-    }
-
-    try:
-        response = bedrock.invoke_model(
-            modelId=model,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body).encode("utf-8"),
-        )
-        result = json.loads(response["body"].read())
-        summary = result["content"][0]["text"].strip()
-    except Exception as e:
-        print(f"Bedrock threw exception {str(e)}, no summary today")
-        return title
+    summary = invoke_summary(bedrock, model, system_prompt, user_content, char_limit)
 
     # Guard against the model declining or apologizing instead of summarizing.
     if any(
@@ -367,9 +347,57 @@ def summarize(title, selftext_html, char_limit):
         return title
 
     if len(summary) > char_limit:
-        summary = summary[: char_limit - 3].rstrip() + "..."
+        correction = (
+            f"Your previous summary was too long: the requested length was "
+            f"{char_limit} characters and you provided a response {len(summary)} "
+            f"characters long. Please rewrite it to be at or under {char_limit} "
+            "characters. Keep the same key points."
+        )
+        shortened = invoke_summary(
+            bedrock, model, system_prompt, user_content, char_limit, extra=correction
+        )
+        if len(shortened) > char_limit:
+            print(
+                f"Summary still too long after retry ({len(shortened)} > {char_limit}), "
+                "truncating"
+            )
+            shortened = shortened[: char_limit - 3].rstrip() + "..."
+        summary = shortened
 
     return summary
+
+
+def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extra=None):
+    instruction = (
+        f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
+        "characters or fewer (this includes every character in your reply, so any "
+        "leading/trailing whitespace, quotes, or code fences count toward the limit)."
+    )
+    system = system_prompt + instruction
+    messages = [{"role": "user", "content": user_content}]
+    if extra:
+        messages.append({"role": "assistant", "content": ""})
+        messages.append({"role": "user", "content": extra})
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1024,
+        "system": system,
+        "messages": messages,
+    }
+
+    try:
+        response = bedrock.invoke_model(
+            modelId=model,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(body).encode("utf-8"),
+        )
+        result = json.loads(response["body"].read())
+        return result["content"][0]["text"].strip()
+    except Exception as e:
+        print(f"Bedrock threw exception {str(e)}, no summary today")
+        return ""
 
 
 def post_prep(title, selftext_html):
