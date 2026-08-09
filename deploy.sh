@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# deploy.sh — Build and deploy lambda_function.py to the Lambda function
+# `twitter_bot__r_cybersecurity` using the AWS CLI.
+#
+# Responsibilities:
+#   1. Build deploy_me.zip via build.sh
+#   2. Update the deployed Lambda code (this NEVER reads or modifies the function
+#      configuration, so credentials stored in environment variables are untouched)
+#   3. Verify the deployment
+#
+# Credentials are retrieved from the named AWS CLI profile (stored in
+# ~/.aws/credentials), so no secret material lives in this script.
+#
+# Usage: ./deploy.sh <aws-profile>   e.g. ./deploy.sh best-of-bot
+#
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <aws-profile>" >&2
+    echo "  e.g.  $0 best-of-bot" >&2
+    exit 2
+fi
+
+AWS_PROFILE="$1"
+export AWS_PROFILE
+
+REGION="us-west-2"
+FUNC_NAME="twitter_bot__r_cybersecurity"
+
+echo "==> Using AWS CLI profile: $AWS_PROFILE"
+
+# Step 1: build the deployment artifact
+echo "==> Building deploy_me.zip"
+bash ./build.sh
+
+# Step 2: deploy the code ($LATEST; config and env vars are never touched)
+ZIP_FILE="deploy_me.zip"
+if [[ ! -f "$ZIP_FILE" ]]; then
+    echo "ERROR: $ZIP_FILE not found after build." >&2
+    exit 1
+fi
+
+echo "==> Deploying Lambda code for $FUNC_NAME ($REGION)"
+# --publish omitted: keeps $LATEST, does not create/publish a new version.
+aws lambda update-function-code \
+    --function-name "$FUNC_NAME" \
+    --region "$REGION" \
+    --zip-file "fileb://$ZIP_FILE"
+
+# Step 3: verify (configuration only; environment variables are not read)
+echo "==> Verifying deployment"
+
+echo "==> Function Summary (latest configuration)"
+aws lambda get-function-configuration \
+    --function-name "$FUNC_NAME" \
+    --region "$REGION" \
+    --query "[FunctionArn, State, LastUpdateStatus, Runtime, Handler]" \
+    --output text
+
+echo "DONE"

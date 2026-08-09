@@ -1,7 +1,7 @@
 import boto3
+import json
 import praw
 import os
-from openai import OpenAI
 import time
 from atproto import Client
 from atproto.xrpc_client.models import AppBskyEmbedExternal
@@ -167,15 +167,20 @@ def lambda_handler(event, context):
             elif len(selftext) > 10:
                 context = selftext
 
-        summary = summarize(title, selftext_html)
+        # Mastodon supports up to 500 characters but we leave headroom for the
+        # link and trailing whitespace, so cap the summary lower.
+        toot_summary = summarize(title, selftext_html, 470)
+
+        # Bluesky caps posts at 300 characters, so cap the summary lower.
+        skeet_summary = summarize(title, selftext_html, 270)
 
         # shorten link by removing title component
         # still always counts as 23 characters though
         post_id = stored_submission["link"].strip("/").split("/")[3]
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
-        post_engine(post_toot, summary, title, context, post_link)
-        post_engine(post_skeet, summary, title, context, post_link)
+        post_engine(post_toot, toot_summary, title, context, post_link)
+        post_engine(post_skeet, skeet_summary, title, context, post_link)
 
     if posted:
         return {"statusCode": 200, "body": "Posted successfully."}
@@ -297,68 +302,71 @@ def submission_ranker(submission):
     }
 
 
-def summarize(title, selftext_html):
-    # budget for skeets is 300 characters
-    # mastodon is 500 (adjustable) but we have to use minimums here
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    model = "gpt-4o"
+def summarize(title, selftext_html, char_limit):
+    bedrock = boto3.client("bedrock-runtime")
+    # Claude Sonnet 4.6 is only invokable in us-west-2 via its US-region
+    # inference profile (the bare model id rejects with on-demand-throughput
+    # errors).
+    model = "us.anthropic.claude-sonnet-4-6"
+
+    system_prompt = (
+        "You produce summaries for cybersecurity news shared on Reddit's "
+        "r/cybersecurity community, written for people on Mastodon and Bluesky who are "
+        "not on Reddit. The pasted title and selftext point to an external article or "
+        "resource. Describe what that clicked-link actually covers, using only facts "
+        "present in the text, so someone off-Reddit can understand the topic and decide "
+        "whether to click. "
+        "Lead with the most newsworthy, concrete detail (for example the affected "
+        "software or CVE, the attacker, the vulnerability class, or the regulatory or "
+        "business impact). "
+        "Do not simply repeat, quote, or paraphrase what the Reddit poster wrote; do not "
+        "summarize Reddit discussion. "
+        "Avoid hashtags, emoji, filler openers ('Here is...', 'This post is...', 'I'm "
+        "sorry, I don't understand'), questions, and meta-commentary. "
+        "Explicit language is OK as long as it is not discriminatory. "
+        f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
+        "characters or fewer."
+    )
+
+    user_content = post_prep(title, selftext_html)
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    }
 
     try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You will be given a discussion post from Reddit which is about cybersecurity. Summarize the post in 280 chracters or less, using only the information present in the post. Avoid any use of hashtags. Explicit language is OK as long as it's not discriminatory. If you cannot summarize the post for any reason, reply 'uavrcl'.",
-                },
-                {"role": "user", "content": openai_post_prep(title, selftext_html)},
-            ],
+        response = bedrock.invoke_model(
+            modelId=model,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(body).encode("utf-8"),
         )
-
-        summary = completion.choices[0].message.content
+        result = json.loads(response["body"].read())
+        summary = result["content"][0]["text"].strip()
     except Exception as e:
-        print(f"OpenAI threw exception {str(e)}, no summary today")
+        print(f"Bedrock threw exception {str(e)}, no summary today")
         return title
 
-    if "uavrcl" in summary.lower():
-        print(
-            f"The keyword 'uavrcl' was found in the summary, disqualifying the summary: {summary}"
-        )
+    # Guard against the model declining or apologizing instead of summarizing.
+    if any(
+        token in summary.lower()
+        for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
+    ):
+        print(f"Model refused to summarize, disqualifying: {summary}")
         return title
 
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You will be given a Tweet. If the Tweet is an apology or has an apologetic tone, reply 'uavrcl'. If the Tweet is not an apology and does not have an apologetic tone, reply 'I am content'.",
-                },
-                {"role": "user", "content": summary},
-            ],
-        )
-
-        sorry = completion.choices[0].message.content
-    except Exception as e:
-        print(f"OpenAI threw exception {str(e)}, no summary today")
-        return title
-
-    if "uavrcl" in sorry.lower():
-        print(
-            f"The keyword 'uavrcl' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
-        )
-        return title
-
-    if "sorry" in sorry.lower() or "apolog" in sorry.lower():
-        print(
-            f"The keyword 'sorry' or 'apolog' was found in the sorry-finder ({sorry}), disqualifying the summary: {summary}"
-        )
-        return title
+    if len(summary) > char_limit:
+        summary = summary[: char_limit - 3].rstrip() + "..."
 
     return summary
 
 
-def openai_post_prep(title, selftext_html):
+def post_prep(title, selftext_html):
     title = remove_multiple_spaces_from_string(title)
     text = remove_html_tags(selftext_html)
 
