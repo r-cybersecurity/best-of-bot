@@ -170,11 +170,12 @@ def lambda_handler(event, context):
         # Mastodon counts URLs as a fixed 23 characters regardless of length, and
         # the link is appended with a leading space, so the summary has 24 chars of
         # headroom against the default 500-char limit.
-        toot_summary = summarize(title, selftext_html, 476)
+        comments = fetch_comments(reddit, stored_submission["link"])
+        toot_summary = summarize(title, selftext_html, comments, 476)
 
         # Bluesky caps posts at 300 characters. The link lives in the embed card,
         # not the post text, so the summary can use the full limit.
-        skeet_summary = summarize(title, selftext_html, 300)
+        skeet_summary = summarize(title, selftext_html, comments, 300)
 
         # shorten link by removing title component
         # still always counts as 23 characters though
@@ -270,6 +271,33 @@ def post_skeet(post, title, context, link):
         return False
 
 
+def fetch_comments(reddit, permalink):
+    """Fetch the top comments for the single chosen post via PRAW, returning them
+    as a newline-joined string so they can be included as extra context for the
+    summarizer. Returns an empty string if no comments are available or if the
+    fetch fails, so the caller proceeds without comment context."""
+    try:
+        submission = reddit.submission(url="https://reddit.com" + permalink)
+        # Drop collapsed "load more" stubs without recursively fetching the whole
+        # tree, so we stay bounded to the comments Reddit already returned.
+        submission.comments.replace_more(limit=0)
+        comments = submission.comments.list()
+        top_comment = [
+            c for c in comments if isinstance(c, praw.models.Comment) and hasattr(c, "body")
+        ]
+        # The default sort is by "top"; sort again by score and take the top 10
+        # to be explicit about the cap, regardless of ordering quirks.
+        top_comment.sort(key=lambda c: c.score, reverse=True)
+        top_comment = top_comment[:10]
+        if not top_comment:
+            print("-- no comments to include, proceeding without them")
+            return ""
+        return unescape("\n".join(c.body for c in top_comment))
+    except Exception as e:
+        print(f"-- fetching comments failed ({str(e)}), proceeding without them")
+        return ""
+
+
 def submission_ranker(submission):
     if submission.over_18 == True:
         return False
@@ -304,7 +332,7 @@ def submission_ranker(submission):
     }
 
 
-def summarize(title, selftext_html, char_limit):
+def summarize(title, selftext_html, comments, char_limit):
     bedrock = boto3.client("bedrock-runtime")
     # Claude Sonnet 4.6 is only invokable in us-west-2 via its US-region
     # inference profile (the bare model id rejects with on-demand-throughput
@@ -316,6 +344,13 @@ def summarize(title, selftext_html, char_limit):
         "written for people on Mastodon and Bluesky who are not on Reddit. The pasted "
         "title and selftext are the Reddit post itself: either a shared external article "
         "or a discussion post where the poster asks a question. "
+        "You may also be given a COMMENTS section containing the top comments on the "
+        "post. The comments are context only: use them to understand the community's "
+        "reaction, corrections, and additional detail, but do not summarize the "
+        "comments themselves. The summary must describe the post (and the question or "
+        "article it raises), not the comment thread. If an article post's comments "
+        "discuss relevant unstated facts, you may fold those into the description, but "
+        "never present reader opinion as fact. "
         "Your job is to help someone off-Reddit understand what the post is about and "
         "decide whether to click through. "
         "If the post is a question or discussion, summarize the question and the "
@@ -334,7 +369,7 @@ def summarize(title, selftext_html, char_limit):
         "Explicit language is OK as long as it is not discriminatory. "
     )
 
-    user_content = post_prep(title, selftext_html)
+    user_content = post_prep(title, selftext_html, comments)
 
     summary = invoke_summary(bedrock, model, system_prompt, user_content, char_limit)
 
@@ -436,7 +471,7 @@ def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extr
         return ""
 
 
-def post_prep(title, selftext_html):
+def post_prep(title, selftext_html, comments=""):
     title = remove_multiple_spaces_from_string(title)
     text = remove_html_tags(selftext_html)
 
@@ -444,7 +479,12 @@ def post_prep(title, selftext_html):
     text = text.replace("\n", " ").replace("\r", "")
     text = remove_multiple_spaces_from_string(text)
 
-    return f"{title} ... {text}"
+    article = f"{title} ... {text}"
+
+    if comments.strip():
+        article += "\n\nCOMMENTS (context only, ignore if not relevant):\n" + comments.strip()
+
+    return article
 
 
 def remove_multiple_spaces_from_string(input):
