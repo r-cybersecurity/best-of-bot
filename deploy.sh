@@ -27,6 +27,7 @@ export AWS_PROFILE
 
 REGION="us-west-2"
 FUNC_NAME="twitter_bot__r_cybersecurity"
+RUNTIME="python3.12"
 
 echo "==> Using AWS CLI profile: $AWS_PROFILE"
 
@@ -43,10 +44,35 @@ fi
 
 echo "==> Deploying Lambda code for $FUNC_NAME ($REGION)"
 # --publish omitted: keeps $LATEST, does not create/publish a new version.
+# The code is uploaded FIRST (built for python3.12) so the packaged extensions
+# match before we switch the runtime, avoiding any import-mismatch window.
 aws lambda update-function-code \
     --function-name "$FUNC_NAME" \
     --region "$REGION" \
     --zip-file "fileb://$ZIP_FILE"
+
+# Wait for the code update to finish before touching configuration (Lambda only
+# allows one in-progress update at a time).
+echo "==> Waiting for code update to complete..."
+for _ in $(seq 1 40); do
+    LU="$(aws lambda get-function-configuration \
+        --function-name "$FUNC_NAME" \
+        --region "$REGION" --query "LastUpdateStatus" --output text)"
+    echo "   LastUpdateStatus=$LU"
+    if [[ "$LU" == "Successful" ]]; then break; fi
+    if [[ "$LU" == "Failed" ]]; then
+        echo "ERROR: Lambda update failed." >&2
+        exit 1
+    fi
+    sleep 3
+done
+
+echo "==> Updating Lambda runtime to $RUNTIME"
+# Configuration only; environment variables are never modified.
+aws lambda update-function-configuration \
+    --function-name "$FUNC_NAME" \
+    --region "$REGION" \
+    --runtime "$RUNTIME"
 
 # Step 3: verify (configuration only; environment variables are not read)
 echo "==> Verifying deployment"
