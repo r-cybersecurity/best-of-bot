@@ -347,33 +347,69 @@ def summarize(title, selftext_html, char_limit):
         return title
 
     if len(summary) > char_limit:
+        # Ask for a rewrite with a softer target so the model aims comfortably
+        # under the hard cap instead of hugging it (reducing the chance the
+        # retry lands over again). We also resend the original post content so
+        # the rewrite isn't working from a bare instruction.
+        retry_target = int(char_limit * 0.85)
         correction = (
             f"Your previous summary was too long: the requested length was "
             f"{char_limit} characters and you provided a response {len(summary)} "
-            f"characters long. Please rewrite it to be at or under {char_limit} "
-            "characters. Keep the same key points."
+            f"characters long. Rewrite it to a maximum of {retry_target} characters, "
+            "aiming to land clearly under the hard cap so it is not truncated. Cut "
+            "length by tightening wording, removing redundancy, and dropping optional "
+            "clauses or examples, but keep the key facts. This is a hard requirement, "
+            "not a suggestion: do not exceed the target. Reply with only the rewritten "
+            "summary, no quotes or preamble."
         )
         shortened = invoke_summary(
-            bedrock, model, system_prompt, user_content, char_limit, extra=correction
+            bedrock,
+            model,
+            system_prompt,
+            user_content,
+            char_limit,
+            extra=correction,
+            retry_target=retry_target,
         )
         if len(shortened) > char_limit:
             print(
                 f"Summary still too long after retry ({len(shortened)} > {char_limit}), "
-                "truncating"
+                "trimming to fit"
             )
-            shortened = shortened[: char_limit - 3].rstrip() + "..."
+            shortened = trim_to_fit(shortened, char_limit)
         summary = shortened
 
     return summary
 
 
-def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extra=None):
+def trim_to_fit(text, char_limit):
+    """Trim text to fit char_limit, breaking at the last word boundary so the
+    result does not end mid-word. Appends \"...\" only if something was cut."""
+    if len(text) <= char_limit:
+        return text
+    cut = text[:char_limit - 3]
+    idx = cut.rfind(" ")
+    if idx > 0:
+        return cut[:idx].rstrip() + "..."
+    return cut.rstrip() + "..."
+
+
+def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extra=None, retry_target=None):
     instruction = (
         f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
         "characters or fewer (this includes every character in your reply, so any "
         "leading/trailing whitespace, quotes, or code fences count toward the limit)."
     )
+    if retry_target:
+        instruction = (
+            f"Reply with only the rewritten summary itself, no quotes or preamble, "
+            f"in at most {retry_target} characters. Aim to come in comfortably under "
+            f"the {char_limit} limit by tightening wording rather than dropping key "
+            f"facts. Count every character, including punctuation and whitespace."
+        )
     system = system_prompt + instruction
+    # Always send the original post context so the model has the source text;
+    # `extra` (if any) is appended as a follow-up user turn.
     messages = [{"role": "user", "content": user_content}]
     if extra:
         messages.append({"role": "assistant", "content": ""})
