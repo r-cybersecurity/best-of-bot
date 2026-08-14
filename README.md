@@ -20,13 +20,13 @@ The contents of this repository are an AWS Lambda function. The Lambda function 
 
 Then for each post, in descending order of priority, it checks in DynamoDB to see if there is a record of this being shared already. If it was, it skips to the next post. If it wasn't, it adds an entry to DynamoDB stating what is being posted, with a TTL of two weeks (so we automatically forget what was posted after there's no more chance for it to appear in Reddit's hot posts list - keeping costs from ballooning). The choices made in the DynamoDB logic ensure that this bot will post *at-most-once* - there may be cases where a shared post is saved to DynamoDB, but is not actually shared on all platforms. We prefer that instead of at-least-once delivery (which could make duplicate posts).
 
-Once a post has been selected to promote on the "best of" bot accounts, a short summary is generated using an LLM (via Bedrock, currently NVIDIA Nemotron 3 Super 120B A12B, `nvidia.nemotron-super-3-120b`), allowing people to know what they're clicking on from other platforms (and boost relevance, searchability, etc. of the bot itself). If the summary is too long for certain platforms, it will fall back to the post title for those platforms only; if the post title is too long, it will fall back to just posting the link. All posts are sanitized to remove hashtags and @ signs before posting to avoid tagging people, companies, etc.
+Once a post has been selected to promote on the "best of" bot accounts, a short summary is generated using an LLM (via OpenRouter, currently DeepSeek V4 Flash 0731, `deepseek/deepseek-v4-flash-0731`, routed to the cheapest provider serving it), allowing people to know what they're clicking on from other platforms (and boost relevance, searchability, etc. of the bot itself). If the summary is too long for certain platforms, it will fall back to the post title for those platforms only; if the post title is too long, it will fall back to just posting the link. All posts are sanitized to remove hashtags and @ signs before posting to avoid tagging people, companies, etc.
 
 Once a post has been made to each supported platform (of we've exhausted our retries for that platform), the Lambda function exits - and if no posts are made, it quits gracefully as well. For any errors encountered the function may try to gracefully continue, but if that is not possible it will error out, triggering SNS to ping the moderation staff to investigate the issue.
 
 ### Program Layout
 
-To keep local testing straightforward, all application logic is in `lambda_function.py`. You can invoke it from your console as well for local testing. Without any credentials provided, it will show the current priority list for posting - but if needed, you can also save the required AWS, OpenAI, and Tweepy credentials to your environment to run it fully locally.
+To keep local testing straightforward, all application logic is in `lambda_function.py`. You can invoke it from your console as well for local testing. Without any credentials provided, it will show the current priority list for posting - but if needed, you can also save the required AWS, OpenRouter, and platform credentials to your environment to run it fully locally.
 
 ### Deployment Notes
 
@@ -36,7 +36,7 @@ Build deployment package with `./build.sh`, then deploy the resulting `deploy_me
 aws lambda update-function-code --function-name twitter_bot__r_cybersecurity --zip-file fileb://deploy_me.zip
 ```
 
-Yes, the dependencies aren't pinned. No, this isn't automated and probably could be. It's a Twitter bot which is updated almost-never and has very little access to anything (worst thing is probably my OpenAI key), so it doesn't *really* matter.
+Core dependencies are pinned in `build.sh` for reproducible builds; the OpenRouter API key is provided to the Lambda function via the `OPENROUTER_API_KEY` environment variable.
 
 ### Considerations
 

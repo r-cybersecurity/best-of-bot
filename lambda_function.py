@@ -1,15 +1,14 @@
 import boto3
-import json
 import praw
 import os
 import time
-from atproto import Client
-from atproto.xrpc_client.models import AppBskyEmbedExternal
+from atproto import Client, models
 from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
 from mastodon import Mastodon
 from bs4 import BeautifulSoup
+from openrouter import OpenRouter
 
 
 rank_settings = {
@@ -254,13 +253,13 @@ def post_skeet(post, title, context, link):
         if BSKY_USERNAME and BSKY_PASSWORD:
             client = Client()
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
-            external_link = AppBskyEmbedExternal.External(
+            external_link = models.AppBskyEmbedExternal.External(
                 uri=link,
                 description=context,
                 title=title,
             )
             client.send_post(
-                text=post, embed=AppBskyEmbedExternal.Main(external=external_link)
+                text=post, embed=models.AppBskyEmbedExternal.Main(external=external_link)
             )
             print(f"-- skeeted {post}")
             return True
@@ -333,8 +332,7 @@ def submission_ranker(submission):
 
 
 def summarize(title, selftext_html, comments, char_limit):
-    bedrock = boto3.client("bedrock-runtime")
-    model = "nvidia.nemotron-super-3-120b"
+    model = "deepseek/deepseek-v4-flash-0731"
 
     system_prompt = (
         "You produce summaries of posts shared on Reddit's r/cybersecurity community, "
@@ -373,48 +371,49 @@ def summarize(title, selftext_html, comments, char_limit):
 
     user_content = post_prep(title, selftext_html, comments)
 
-    summary = invoke_summary(bedrock, model, system_prompt, user_content, char_limit)
+    with OpenRouter(api_key=os.getenv("OPENROUTER_API_KEY", "")) as open_router:
+        summary = invoke_summary(open_router, model, system_prompt, user_content, char_limit)
 
-    # Guard against the model declining or apologizing instead of summarizing.
-    if any(
-        token in summary.lower()
-        for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
-    ):
-        print(f"Model refused to summarize, disqualifying: {summary}")
-        return title
+        # Guard against the model declining or apologizing instead of summarizing.
+        if any(
+            token in summary.lower()
+            for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
+        ):
+            print(f"Model refused to summarize, disqualifying: {summary}")
+            return title
 
-    if len(summary) > char_limit:
-        # Ask for a rewrite with a softer target so the model aims comfortably
-        # under the hard cap instead of hugging it (reducing the chance the
-        # retry lands over again). We also resend the original post content so
-        # the rewrite isn't working from a bare instruction.
-        retry_target = int(char_limit * 0.85)
-        correction = (
-            f"Your previous summary was too long: the requested length was "
-            f"{char_limit} characters and you provided a response {len(summary)} "
-            f"characters long. Rewrite it to a maximum of {retry_target} characters, "
-            "aiming to land clearly under the hard cap so it is not truncated. Cut "
-            "length by tightening wording, removing redundancy, and dropping optional "
-            "clauses or examples, but keep the key facts. This is a hard requirement, "
-            "not a suggestion: do not exceed the target. Reply with only the rewritten "
-            "summary, no quotes or preamble."
-        )
-        shortened = invoke_summary(
-            bedrock,
-            model,
-            system_prompt,
-            user_content,
-            char_limit,
-            extra=correction,
-            retry_target=retry_target,
-        )
-        if len(shortened) > char_limit:
-            print(
-                f"Summary still too long after retry ({len(shortened)} > {char_limit}), "
-                "trimming to fit"
+        if len(summary) > char_limit:
+            # Ask for a rewrite with a softer target so the model aims comfortably
+            # under the hard cap instead of hugging it (reducing the chance the
+            # retry lands over again). We also resend the original post content so
+            # the rewrite isn't working from a bare instruction.
+            retry_target = int(char_limit * 0.85)
+            correction = (
+                f"Your previous summary was too long: the requested length was "
+                f"{char_limit} characters and you provided a response {len(summary)} "
+                f"characters long. Rewrite it to a maximum of {retry_target} characters, "
+                "aiming to land clearly under the hard cap so it is not truncated. Cut "
+                "length by tightening wording, removing redundancy, and dropping optional "
+                "clauses or examples, but keep the key facts. This is a hard requirement, "
+                "not a suggestion: do not exceed the target. Reply with only the rewritten "
+                "summary, no quotes or preamble."
             )
-            shortened = trim_to_fit(shortened, char_limit)
-        summary = shortened
+            shortened = invoke_summary(
+                open_router,
+                model,
+                system_prompt,
+                user_content,
+                char_limit,
+                extra=correction,
+                retry_target=retry_target,
+            )
+            if len(shortened) > char_limit:
+                print(
+                    f"Summary still too long after retry ({len(shortened)} > {char_limit}), "
+                    "trimming to fit"
+                )
+                shortened = trim_to_fit(shortened, char_limit)
+            summary = shortened
 
     return summary
 
@@ -431,7 +430,7 @@ def trim_to_fit(text, char_limit):
     return cut.rstrip() + "..."
 
 
-def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extra=None, retry_target=None):
+def invoke_summary(open_router, model, system_prompt, user_content, char_limit, extra=None, retry_target=None):
     instruction = (
         f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
         "characters or fewer (this includes every character in your reply, so any "
@@ -444,37 +443,49 @@ def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extr
             f"the {char_limit} limit by tightening wording rather than dropping key "
             f"facts. Count every character, including punctuation and whitespace."
         )
-    # Nemotron 3 Super disables reasoning with the /no_think system-prompt
-    # directive; without it the model emits longer chain-of-thought traces. We
-    # tested on and off: no clear quality benefit for this summarization task,
-    # so we keep thinking off to minimize latency and cost.
-    system = "/no_think\n" + system_prompt + instruction
-    # Nemotron uses the OpenAI-style messages format: `system` is a message role
-    # (not a top-level parameter) and `content` is a plain string.
+    system = system_prompt + instruction
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": user_content})
     if extra:
         messages.append({"role": "assistant", "content": ""})
         messages.append({"role": "user", "content": extra})
 
-    body = {
-        "messages": messages,
-        "max_tokens": 1024,
-        "temperature": 0.2,
-    }
-
     try:
-        response = bedrock.invoke_model(
-            modelId=model,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body).encode("utf-8"),
+        response = open_router.chat.send(
+            model=model,
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.2,
+            # Route to the cheapest provider serving the model (sort by minimum
+            # price, no provider pinned), with graceful fallback if it errors.
+            provider={"sort": "price", "allow_fallbacks": True},
+            # DeepSeek V4 Flash supports thinking; enable it explicitly.
+            reasoning={"effort": "high"},
         )
-        result = json.loads(response["body"].read())
-        return result["choices"][0]["message"]["content"].strip()
+        return message_text(response.choices[0].message)
     except Exception as e:
-        print(f"Bedrock threw exception {str(e)}, no summary today")
+        print(f"OpenRouter threw exception {str(e)}, no summary today")
         return ""
+
+
+def message_text(message):
+    """Extract plain text from an SDK assistant message. Content is normally a
+    plain string, but with reasoning enabled some providers return a list of
+    typed content parts, so handle both."""
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif hasattr(item, "text"):
+                parts.append(item.text)
+            elif hasattr(item, "raw") and isinstance(item.raw, dict):
+                parts.append(item.raw.get("text", ""))
+        return "".join(parts)
+    return ""
 
 
 def post_prep(title, selftext_html, comments=""):
