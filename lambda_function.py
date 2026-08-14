@@ -334,10 +334,7 @@ def submission_ranker(submission):
 
 def summarize(title, selftext_html, comments, char_limit):
     bedrock = boto3.client("bedrock-runtime")
-    # Claude Sonnet 4.6 is only invokable in us-west-2 via its US-region
-    # inference profile (the bare model id rejects with on-demand-throughput
-    # errors).
-    model = "us.anthropic.claude-sonnet-4-6"
+    model = "nvidia.nemotron-super-3-120b"
 
     system_prompt = (
         "You produce summaries of posts shared on Reddit's r/cybersecurity community, "
@@ -447,19 +444,23 @@ def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extr
             f"the {char_limit} limit by tightening wording rather than dropping key "
             f"facts. Count every character, including punctuation and whitespace."
         )
-    system = system_prompt + instruction
-    # Always send the original post context so the model has the source text;
-    # `extra` (if any) is appended as a follow-up user turn.
-    messages = [{"role": "user", "content": user_content}]
+    # Nemotron 3 Super disables reasoning with the /no_think system-prompt
+    # directive; without it the model emits longer chain-of-thought traces. We
+    # tested on and off: no clear quality benefit for this summarization task,
+    # so we keep thinking off to minimize latency and cost.
+    system = "/no_think\n" + system_prompt + instruction
+    # Nemotron uses the OpenAI-style messages format: `system` is a message role
+    # (not a top-level parameter) and `content` is a plain string.
+    messages = [{"role": "system", "content": system}]
+    messages.append({"role": "user", "content": user_content})
     if extra:
         messages.append({"role": "assistant", "content": ""})
         messages.append({"role": "user", "content": extra})
 
     body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
-        "system": system,
         "messages": messages,
+        "max_tokens": 1024,
+        "temperature": 0.2,
     }
 
     try:
@@ -470,7 +471,7 @@ def invoke_summary(bedrock, model, system_prompt, user_content, char_limit, extr
             body=json.dumps(body).encode("utf-8"),
         )
         result = json.loads(response["body"].read())
-        return result["content"][0]["text"].strip()
+        return result["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"Bedrock threw exception {str(e)}, no summary today")
         return ""
