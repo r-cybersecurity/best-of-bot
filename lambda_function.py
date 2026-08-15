@@ -95,6 +95,12 @@ HARD RULES
 MIN_SUMMARY_LENGTH = 40
 
 
+class SummaryGenerationError(RuntimeError):
+    """Raised when the summarizer cannot produce a valid summary after all
+    retries. Propagates out of the Lambda so failures are loud, never silently
+    falling back to posting the raw title."""
+
+
 rank_settings = {
     "Ask Me Anything!": {
         "karma": 1,
@@ -431,74 +437,18 @@ def summarize(title, selftext_html, comments, char_limit):
     user_content = post_prep(title, selftext_html, comments)
 
     with OpenRouter(api_key=api_key) as open_router:
-        summary = invoke_summary(open_router, model, user_content, char_limit)
-
-        if len(summary) > char_limit:
-            # Ask for a rewrite with a softer target so the model aims comfortably
-            # under the hard cap instead of hugging it (reducing the chance the
-            # retry lands over again). We also resend the original post content so
-            # the rewrite isn't working from a bare instruction.
-            retry_target = int(char_limit * 0.85)
-            correction = (
-                f"Your previous summary was too long: the requested length was "
-                f"{char_limit} characters and you provided a response {len(summary)} "
-                f"characters long. Rewrite it to a maximum of {retry_target} characters, "
-                "aiming to land clearly under the hard cap so it is not truncated. Cut "
-                "length by tightening wording, removing redundancy, and dropping optional "
-                "clauses or examples, but keep the key facts. This is a hard requirement, "
-                "not a suggestion: do not exceed the target. Reply with only the rewritten "
-                "summary, no quotes or preamble."
-            )
-            shortened = invoke_summary(
-                open_router,
-                model,
-                user_content,
-                char_limit,
-                extra=correction,
-                retry_target=retry_target,
-            )
-            if len(shortened) > char_limit:
-                print(
-                    f"Summary still too long after retry ({len(shortened)} > {char_limit}), "
-                    "trimming to fit"
-                )
-                shortened = trim_to_fit(shortened, char_limit)
-            summary = shortened
-
-    return summary
+        return invoke_summary(open_router, model, user_content, char_limit)
 
 
-def trim_to_fit(text, char_limit):
-    """Trim text to fit char_limit, breaking at the last word boundary so the
-    result does not end mid-word. Appends \"...\" only if something was cut."""
-    if len(text) <= char_limit:
-        return text
-    cut = text[:char_limit - 3]
-    idx = cut.rfind(" ")
-    if idx > 0:
-        return cut[:idx].rstrip() + "..."
-    return cut.rstrip() + "..."
-
-
-def invoke_summary(open_router, model, user_content, char_limit, extra=None, retry_target=None):
+def invoke_summary(open_router, model, user_content, char_limit):
     instruction = (
         f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
         "characters or fewer (this includes every character in your reply, so any "
         "leading/trailing whitespace, quotes, or code fences count toward the limit)."
     )
-    if retry_target:
-        instruction = (
-            f"Reply with only the rewritten summary itself, no quotes or preamble, "
-            f"in at most {retry_target} characters. Aim to come in comfortably under "
-            f"the {char_limit} limit by tightening wording rather than dropping key "
-            f"facts. Count every character, including punctuation and whitespace."
-        )
     system = SUMMARIZER_SYSTEM_PROMPT + "\n\n" + instruction
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": user_content})
-    if extra:
-        messages.append({"role": "assistant", "content": ""})
-        messages.append({"role": "user", "content": extra})
 
     disqualify_reason = (
         "Your previous response was disqualified because it did not follow the "
@@ -507,9 +457,23 @@ def invoke_summary(open_router, model, user_content, char_limit, extra=None, ret
         "summary. Do not apologize, decline, explain, or mention Reddit or "
         "r/cybersecurity. Reply with only the summary itself."
     )
+    # Softer target for over-limit rewrites so the model aims comfortably under
+    # the hard cap instead of hugging it (reducing the chance the retry lands
+    # over again).
+    retry_target = int(char_limit * 0.85)
+
+    # Be kind to OpenRouter providers: if they are struggling under load, an
+    # immediate retry just adds to the pile. Wait a bit, with backoff, before
+    # the 2nd and 3rd attempts. This bot runs hourly, so the extra latency is
+    # not a concern.
+    retry_delays = (15, 30)
 
     last_error = None
     for attempt in range(1, 4):
+        if attempt > 1:
+            delay = retry_delays[attempt - 2]
+            print(f"-- waiting {delay}s before attempt {attempt}/3")
+            time.sleep(delay)
         try:
             response = open_router.chat.send(
                 model=model,
@@ -535,13 +499,33 @@ def invoke_summary(open_router, model, user_content, char_limit, extra=None, ret
             messages.append({"role": "user", "content": disqualify_reason})
             continue
 
+        if is_over_limit(summary, char_limit):
+            print(f"-- summary attempt {attempt}/3 over limit ({len(summary)} > {char_limit})")
+            over_limit_reason = (
+                f"Your previous summary was {len(summary)} characters long, over the "
+                f"{char_limit} character limit. Rewrite it to a maximum of {retry_target} "
+                "characters, aiming to land clearly under the hard cap so it is not "
+                "truncated. Cut length by tightening wording, removing redundancy, and "
+                "dropping optional clauses or examples, but keep the key facts. This is "
+                "a hard requirement, not a suggestion: do not exceed the target. Reply "
+                "with only the rewritten summary, no quotes or preamble."
+            )
+            messages.append({"role": "assistant", "content": summary})
+            messages.append({"role": "user", "content": over_limit_reason})
+            continue
+
         return summary
 
+    # Never silently degrade to the title: if the model cannot produce a valid
+    # summary in three attempts, surface it as an error so it gets noticed.
     if last_error:
-        print(f"-- OpenRouter failed all 3 summary attempts: {str(last_error)}, no summary today")
-    else:
-        print("-- all 3 summary attempts were disqualified, no summary today")
-    return ""
+        raise SummaryGenerationError(
+            f"no summary after 3 attempts, last error: {last_error}"
+        ) from last_error
+    raise SummaryGenerationError(
+        "no summary after 3 attempts: every response was disqualified, over "
+        f"the {char_limit} character limit, or both"
+    )
 
 
 def is_disqualified(summary):
@@ -560,6 +544,11 @@ def is_disqualified(summary):
     if re.search(r"\breddit\b|r/cybersecurity", lowered):
         return True
     return False
+
+
+def is_over_limit(summary, char_limit):
+    """Return True when the summary exceeds the hard character limit."""
+    return len(summary) > char_limit
 
 
 def message_text(message):
