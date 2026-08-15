@@ -12,17 +12,12 @@
 # Credentials are retrieved from the named AWS CLI profile (stored in
 # ~/.aws/credentials), so no secret material lives in this script.
 #
-# Usage: ./deploy.sh <aws-profile>   e.g. ./deploy.sh best-of-bot
+# Usage: ./deploy.sh [<aws-profile>]   e.g. ./deploy.sh r-cybersecurity
+# Defaults to the r-cybersecurity profile.
 #
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <aws-profile>" >&2
-    echo "  e.g.  $0 best-of-bot" >&2
-    exit 2
-fi
-
-AWS_PROFILE="$1"
+AWS_PROFILE="${1:-r-cybersecurity}"
 export AWS_PROFILE
 
 REGION="us-west-2"

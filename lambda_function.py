@@ -478,7 +478,7 @@ def invoke_summary(open_router, model, user_content, char_limit):
             response = open_router.chat.send(
                 model=model,
                 messages=messages,
-                max_tokens=1024,
+                max_tokens=65536, # Includes lots of space for reasoning
                 temperature=0.4,
                 # Route to the cheapest provider serving the model (sort by minimum
                 # price, no provider pinned), with graceful fallback if it errors.
