@@ -1,6 +1,7 @@
 import boto3
 import praw
 import os
+import re
 import time
 from atproto import Client, models
 from html import escape, unescape
@@ -9,6 +10,89 @@ from pprint import pprint
 from mastodon import Mastodon
 from bs4 import BeautifulSoup
 from openrouter import OpenRouter
+
+
+# Summarizer system prompt. Kept at the top of the file, separate from the
+# request plumbing, so it can be edited without touching the code around it.
+SUMMARIZER_SYSTEM_PROMPT = """THE TASK
+You write summaries of posts from Reddit's r/cybersecurity for people reading
+on Mastodon and Bluesky who are not on Reddit. The account publishing these
+posts is 'Best of r/cybersecurity' (Bluesky @cybersecurity.page; Mastodon
+@r_cybersecurity@infosec.exchange), so its audience already knows the content
+is from Reddit and from r/cybersecurity. Your job is to help someone off-Reddit
+understand what the post is about and decide whether to click through.
+
+THE INPUT
+You are given a title, the post's selftext, and optionally a COMMENTS section
+with the top comments on the post. The title and selftext are the post itself:
+either a shared external article or a discussion post where the poster asks a
+question. The comments are context only: use them to understand the community's
+reaction, corrections, and additional detail, but do not summarize the comments
+themselves. If an article post's comments discuss relevant unstated facts, you
+may fold those into the description, but never present reader opinion as fact.
+
+PARAMETERS
+- Reply with only the summary, nothing else: no quotes, preamble, or commentary.
+- Use only facts present in the text. Never invent facts, names, numbers,
+  dates, quotes, or citations.
+- Never restate the Reddit context: do not write 'on Reddit',
+  'r/cybersecurity', 'Reddit post', 'Reddit user', or similar.
+- If the post is a question or discussion, summarize the question and the
+  debate the poster is raising, not the answer. Do not answer the question
+  yourself and do not let the summary read as a verdict; keep it an open
+  question.
+- If the post links to an external article, describe what that article
+  actually covers, using only facts present in the text.
+- Lead with the most newsworthy, concrete detail: the affected software or
+  CVE, the attacker, the vulnerability class, or the business or regulatory
+  impact.
+- The summary must describe the post, not the comment thread.
+
+WRITING STYLE AND VOICE
+Write like a dry, world-weary security journalist who has seen it all before:
+someone who has patched one too many ActiveMQ boxes and long ago stopped
+being surprised. Deadpan and understated: say alarming things calmly, and let
+the facts do the work. 'This is not ideal' is closer to the mark than 'this
+is a disaster'. A wry aside or two per summary is welcome, for example
+describing an organization that ignored nine disclosure emails as having no
+functioning intake process, or noting that a 13-year-old flaw finally ran
+out of places to hide. The humor is a quiet observation about the facts, not
+a punchline bolted onto them. Aim it at vendor marketing, hype, and the
+eternal comedy of other people's incident response. Punch up, never down: it
+is fine to be sharply funny about vendors, big tech, breach brokers, and
+management, and never funny at the expense of victims, small teams,
+researchers, or people asking honest questions. Be skeptical of claims and
+call out spin when you can see it, but do not editorialize about the poster.
+Semi-professional: you can be blunt and use plain language, but you are
+writing for a professional audience, so stay sharp and informed rather than
+sloppy. Avoid gushing, superlatives, and hype. End on the last concrete
+fact; do not add a generic upbeat closer.
+
+HARD RULES
+- Never restate the Reddit context: do not write 'on Reddit', 'r/cybersecurity',
+  'Reddit post', 'Reddit user', or similar. The audience already knows.
+- No em dashes or en dashes. Use periods, commas, colons, or parentheses
+  instead.
+- No AI tells: no 'delve', 'landscape', 'tapestry', 'testament', 'pivotal',
+  'underscore', 'vibrant', 'showcase', 'crucial', 'elevate', 'foster', or
+  similar inflated vocabulary. No 'not only... but also...' constructions, no
+  tailing negations, and no rule-of-three lists.
+- No superficial '-ing' phrases tacked on for fake depth ('highlighting...',
+  'underscoring...', 'showcasing...').
+- No filler openers ('Here is...', 'This post is...', 'Let's dive into...'),
+  no apologies, no 'I hope this helps', no signposting, no meta-commentary.
+- No manufactured drama: do not stack short dramatic fragments. One short
+  sentence for emphasis is fine; a run of them is not.
+- Prefer active voice and plain 'is', 'are', and 'has' constructions.
+- Vary sentence length. Write the way a good human writer would.
+- No hashtags, emojis, boldface, or curly quotation marks. Straight quotes
+  only.
+- Explicit language is fine as long as it is not discriminatory.
+"""
+
+# Any response shorter than this is not a real summary (for example a provider
+# returning a reasoning-only or empty completion) and gets retried.
+MIN_SUMMARY_LENGTH = 40
 
 
 rank_settings = {
@@ -334,53 +418,20 @@ def submission_ranker(submission):
 def summarize(title, selftext_html, comments, char_limit):
     model = "deepseek/deepseek-v4-flash-0731"
 
-    system_prompt = (
-        "You produce summaries of posts shared on Reddit's r/cybersecurity community, "
-        "written for people on Mastodon and Bluesky who are not on Reddit. The account "
-        "publishing these posts is 'Best of r/cybersecurity' (Bluesky "
-        "@cybersecurity.page; Mastodon @r_cybersecurity@infosec.exchange), so its "
-        "audience already knows both that the content is from Reddit and that it is "
-        "from r/cybersecurity. Never restate either fact in the summary: do not write "
-        "'on Reddit', 'r/cybersecurity', 'Reddit post', 'Reddit user', or similar. "
-        "The pasted title and selftext are the Reddit post itself: either a shared "
-        "external article or a discussion post where the poster asks a question. "
-        "You may also be given a COMMENTS section containing the top comments on the "
-        "post. The comments are context only: use them to understand the community's "
-        "reaction, corrections, and additional detail, but do not summarize the "
-        "comments themselves. The summary must describe the post (and the question or "
-        "article it raises), not the comment thread. If an article post's comments "
-        "discuss relevant unstated facts, you may fold those into the description, but "
-        "never present reader opinion as fact. "
-        "Your job is to help someone off-Reddit understand what the post is about and "
-        "decide whether to click through. "
-        "If the post is a question or discussion, summarize the question and the "
-        "discussion the poster is raising - what the poster is asking and the key points "
-        "or context of the debate - NOT any answer. Do not answer the question yourself "
-        "and do not let the summary read as a definitive verdict; present it as an "
-        "open question/discussion. "
-        "If the post links to an external article or resource, describe what that "
-        "clicked-link actually covers, using only facts present in the text. "
-        "Lead with the most newsworthy, concrete detail (for example the affected "
-        "software or CVE, the attacker, the vulnerability class, or the regulatory or "
-        "business impact). "
-        "Use only facts present in the text. "
-        "Avoid hashtags, emoji, filler openers ('Here is...', 'This post is...', 'I'm "
-        "sorry, I don't understand'), and meta-commentary. "
-        "Explicit language is OK as long as it is not discriminatory. "
-    )
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        # Fail loudly rather than silently producing no summary (which would
+        # otherwise fall back to posting the raw title). A missing key means
+        # the bot is misconfigured and we want to know about it.
+        raise RuntimeError(
+            "OPENROUTER_API_KEY environment variable is not set; "
+            "refusing to silently skip summary generation"
+        )
 
     user_content = post_prep(title, selftext_html, comments)
 
-    with OpenRouter(api_key=os.getenv("OPENROUTER_API_KEY", "")) as open_router:
-        summary = invoke_summary(open_router, model, system_prompt, user_content, char_limit)
-
-        # Guard against the model declining or apologizing instead of summarizing.
-        if any(
-            token in summary.lower()
-            for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
-        ):
-            print(f"Model refused to summarize, disqualifying: {summary}")
-            return title
+    with OpenRouter(api_key=api_key) as open_router:
+        summary = invoke_summary(open_router, model, user_content, char_limit)
 
         if len(summary) > char_limit:
             # Ask for a rewrite with a softer target so the model aims comfortably
@@ -401,7 +452,6 @@ def summarize(title, selftext_html, comments, char_limit):
             shortened = invoke_summary(
                 open_router,
                 model,
-                system_prompt,
                 user_content,
                 char_limit,
                 extra=correction,
@@ -430,7 +480,7 @@ def trim_to_fit(text, char_limit):
     return cut.rstrip() + "..."
 
 
-def invoke_summary(open_router, model, system_prompt, user_content, char_limit, extra=None, retry_target=None):
+def invoke_summary(open_router, model, user_content, char_limit, extra=None, retry_target=None):
     instruction = (
         f"Reply with only the summary itself, no quotes or preamble, in {char_limit} "
         "characters or fewer (this includes every character in your reply, so any "
@@ -443,29 +493,73 @@ def invoke_summary(open_router, model, system_prompt, user_content, char_limit, 
             f"the {char_limit} limit by tightening wording rather than dropping key "
             f"facts. Count every character, including punctuation and whitespace."
         )
-    system = system_prompt + instruction
+    system = SUMMARIZER_SYSTEM_PROMPT + "\n\n" + instruction
     messages = [{"role": "system", "content": system}]
     messages.append({"role": "user", "content": user_content})
     if extra:
         messages.append({"role": "assistant", "content": ""})
         messages.append({"role": "user", "content": extra})
 
-    try:
-        response = open_router.chat.send(
-            model=model,
-            messages=messages,
-            max_tokens=1024,
-            temperature=0.2,
-            # Route to the cheapest provider serving the model (sort by minimum
-            # price, no provider pinned), with graceful fallback if it errors.
-            provider={"sort": "price", "allow_fallbacks": True},
-            # DeepSeek V4 Flash supports thinking; enable it explicitly.
-            reasoning={"effort": "high"},
-        )
-        return message_text(response.choices[0].message)
-    except Exception as e:
-        print(f"OpenRouter threw exception {str(e)}, no summary today")
-        return ""
+    disqualify_reason = (
+        "Your previous response was disqualified because it did not follow the "
+        "task instructions: it refused, apologized, or said it could not do the "
+        "task, it restated the Reddit context, or it was too short to be a real "
+        "summary. Do not apologize, decline, explain, or mention Reddit or "
+        "r/cybersecurity. Reply with only the summary itself."
+    )
+
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            response = open_router.chat.send(
+                model=model,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.4,
+                # Route to the cheapest provider serving the model (sort by minimum
+                # price, no provider pinned), with graceful fallback if it errors.
+                provider={"sort": "price", "allow_fallbacks": True},
+                # DeepSeek V4 Flash supports thinking; enable it explicitly.
+                reasoning={"effort": "high"},
+            )
+            summary = message_text(response.choices[0].message).strip()
+        except Exception as e:
+            last_error = e
+            print(f"-- summary attempt {attempt}/3 threw exception: {str(e)}")
+            continue
+
+        if is_disqualified(summary):
+            print(f"-- summary attempt {attempt}/3 disqualified: {summary}")
+            # Nudge the model back on task instead of letting it repeat itself.
+            messages.append({"role": "assistant", "content": summary})
+            messages.append({"role": "user", "content": disqualify_reason})
+            continue
+
+        return summary
+
+    if last_error:
+        print(f"-- OpenRouter failed all 3 summary attempts: {str(last_error)}, no summary today")
+    else:
+        print("-- all 3 summary attempts were disqualified, no summary today")
+    return ""
+
+
+def is_disqualified(summary):
+    """Return True when the model refused, apologized, or claimed it could not
+    do the task instead of producing a summary, when it restated the Reddit
+    context the prompt explicitly forbids mentioning, or when the response is
+    too short to be a real summary."""
+    lowered = summary.lower()
+    if len(summary) < MIN_SUMMARY_LENGTH:
+        return True
+    if any(
+        token in lowered
+        for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
+    ):
+        return True
+    if re.search(r"\breddit\b|r/cybersecurity", lowered):
+        return True
+    return False
 
 
 def message_text(message):
