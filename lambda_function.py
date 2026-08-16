@@ -162,8 +162,9 @@ def lambda_handler(event, context):
         post_created_epoch = submission.created_utc
 
         if time.time() < post_created_epoch + (15 * 60):
-            # post is less than 15m old, strongly increases chance that the post
-            # is unmoderated, for ex. AutoMod may not run for 0-3m in typical use
+            # Post is less than 15 minutes old, which strongly increases the
+            # chance that it is unmoderated; for example, AutoMod may not run
+            # for 0-3 minutes in typical use.
             continue
 
         submission_rank = submission_ranker(submission)
@@ -181,7 +182,7 @@ def lambda_handler(event, context):
         attempts += 1
         stored_submission = {"priority": 0}
 
-        # identify which submission we want to post the most
+        # Identify which submission we want to post the most.
         for submission in qualifying_submissions:
             if not submission["link"] in disqualified_submissions:
                 if submission["priority"] > stored_submission["priority"]:
@@ -190,7 +191,7 @@ def lambda_handler(event, context):
         disqualified_submissions.append(stored_submission["link"])
         print(str(stored_submission["priority"]) + " " + stored_submission["link"])
 
-        # check in DynamoDB if the submission has been posted
+        # Check in DynamoDB if the submission has been posted.
         dynamo_get = []
         try:
             dynamo_get = client.get_item(
@@ -199,41 +200,22 @@ def lambda_handler(event, context):
             )
         except ClientError as e:
             print(f"-- DynamoDB GET failed: {e.response['Error']['Message']}")
-            # we don't know if we've posted this, so let's skip it
-            # this enforces at most once posting
+            # We don't know if we've posted this, so skip it.
+            # This enforces at-most-once posting.
             continue
         except NoCredentialsError:
-            # local devel without access to DDB, just keep going
+            # Local development without access to DDB; just keep going.
             pass
 
-        # we've confidently posted the submission, skip it
+        # We've confidently posted the submission, so skip it.
         if "Item" in dynamo_get:
             print("-- already posted, skipping")
             continue
 
-        # we haven't posted the submission, try logging that we'll post it
-        expires = str((14 * 24 * 60 * 60) + int(time.time()))  # 14 days from now
-        try:
-            client.put_item(
-                TableName="twitter_bot__r_cybersecurity",
-                Item={"link": {"S": stored_submission["link"]}, "ttl": {"N": expires}},
-            )
-        except ClientError as e:
-            print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
-            # we don't know if we've saved this, so let's skip it
-            # this enforces at most once posting
-            continue
-        except NoCredentialsError:
-            # local devel without access to DDB, just keep going
-            pass
-        except Exception as e:
-            print(e)
-            # we don't know if we've saved this, so let's skip it
-            # this enforces at most once posting
-            continue
-
-        posted = True
-
+        # Build the post and generate summaries before claiming the post in
+        # DynamoDB. If the LLM provider is stalled or failing, this fails loudly
+        # without marking the post as shared, so a later run can still pick it up
+        # instead of permanently skipping a post that was never actually posted.
         print("-- building post")
         title = unescape(stored_submission["title"])
         selftext_html = ""
@@ -242,15 +224,15 @@ def lambda_handler(event, context):
         if "selftext_html" in stored_submission.keys():
             selftext_html = unescape(stored_submission["selftext_html"])
 
-            # clean irrelevant text from HTML
+            # Clean irrelevant text from the HTML.
             soup = BeautifulSoup(selftext_html, features="html.parser")
             for script in soup(["script", "style"]):
                 script.extract()
 
-            # get clean selftext
+            # Get the clean selftext.
             selftext = soup.get_text()
 
-            # use as link context
+            # Use it as link context.
             if len(selftext) > 200:
                 context = selftext[:197] + "..."
             elif len(selftext) > 10:
@@ -266,8 +248,38 @@ def lambda_handler(event, context):
         # not the post text, so the summary can use the full limit.
         skeet_summary = summarize(title, selftext_html, comments, 300)
 
-        # shorten link by removing title component
-        # still always counts as 23 characters though
+        # Claim the submission atomically. The conditional put means only the
+        # first invocation to reach this point for a given post wins, so even if
+        # two runs race on the same post, only one can post it (no duplicates).
+        # TTL expires 14 days from now.
+        expires = str((14 * 24 * 60 * 60) + int(time.time()))
+        try:
+            client.put_item(
+                TableName="twitter_bot__r_cybersecurity",
+                Item={"link": {"S": stored_submission["link"]}, "ttl": {"N": expires}},
+                ConditionExpression="attribute_not_exists(link)",
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                print("-- another run claimed this post, skipping")
+            else:
+                print(f"-- DynamoDB PUT failed: {e.response['Error']['Message']}")
+            # We don't know if we've saved this, so skip it.
+            # This enforces at-most-once posting.
+            continue
+        except NoCredentialsError:
+            # Local development without access to DDB; just keep going.
+            pass
+        except Exception as e:
+            print(e)
+            # We don't know if we've saved this, so skip it.
+            # This enforces at-most-once posting.
+            continue
+
+        posted = True
+
+        # Shorten the link by removing the title component.
+        # It still always counts as 23 characters though.
         post_id = stored_submission["link"].strip("/").split("/")[3]
         post_link = f"https://reddit.com/r/cybersecurity/comments/{post_id}/"
 
@@ -294,7 +306,7 @@ def clean_tokens(text_data):
 
     clean_tokens = []
     for token_to_clean in tokens_to_clean:
-        # could also ensure no cashtags?
+        # Could also strip cashtags here.
         clean_token = token_to_clean.strip("#@")
         clean_tokens.append(clean_token)
 
@@ -323,7 +335,8 @@ def post_toot(post, title, context, link):
                 client_secret=MASTO_CLIENT_SECRET,
                 access_token=MASTO_ACCESS_TOKEN,
             )
-            mastodon.status_post(post_me, visibility="unlisted")  # conservative
+            # Conservative: keep posts out of public timelines.
+            mastodon.status_post(post_me, visibility="unlisted")
             print(f"-- tooted {post_me}")
             return True
         else:
@@ -349,7 +362,8 @@ def post_skeet(post, title, context, link):
                 title=title,
             )
             client.send_post(
-                text=post, embed=models.AppBskyEmbedExternal.Main(external=external_link)
+                text=post,
+                embed=models.AppBskyEmbedExternal.Main(external=external_link),
             )
             print(f"-- skeeted {post}")
             return True
@@ -372,7 +386,9 @@ def fetch_comments(reddit, permalink):
         submission.comments.replace_more(limit=0)
         comments = submission.comments.list()
         top_comment = [
-            c for c in comments if isinstance(c, praw.models.Comment) and hasattr(c, "body")
+            c
+            for c in comments
+            if isinstance(c, praw.models.Comment) and hasattr(c, "body")
         ]
         # The default sort is by "top"; sort again by score and take the top 10
         # to be explicit about the cap, regardless of ordering quirks.
@@ -466,7 +482,7 @@ def invoke_summary(open_router, model, user_content, char_limit):
     # immediate retry just adds to the pile. Wait a bit, with backoff, before
     # the 2nd and 3rd attempts. This bot runs hourly, so the extra latency is
     # not a concern.
-    retry_delays = (15, 30)
+    retry_delays = (3, 6)
 
     last_error = None
     for attempt in range(1, 4):
@@ -478,13 +494,16 @@ def invoke_summary(open_router, model, user_content, char_limit):
             response = open_router.chat.send(
                 model=model,
                 messages=messages,
-                max_tokens=65536, # Includes lots of space for reasoning
+                max_tokens=65536,  # Includes lots of space for reasoning.
                 temperature=0.4,
                 # Route to the cheapest provider serving the model (sort by minimum
                 # price, no provider pinned), with graceful fallback if it errors.
                 provider={"sort": "price", "allow_fallbacks": True},
                 # DeepSeek V4 Flash supports thinking; enable it explicitly.
                 reasoning={"effort": "high"},
+                # Bound each request so a stalled provider cannot hang the whole
+                # invocation; the retry loop above owns the retry policy.
+                timeout_ms=120000,
             )
             summary = message_text(response.choices[0].message).strip()
         except Exception as e:
@@ -500,7 +519,9 @@ def invoke_summary(open_router, model, user_content, char_limit):
             continue
 
         if is_over_limit(summary, char_limit):
-            print(f"-- summary attempt {attempt}/3 over limit ({len(summary)} > {char_limit})")
+            print(
+                f"-- summary attempt {attempt}/3 over limit ({len(summary)} > {char_limit})"
+            )
             over_limit_reason = (
                 f"Your previous summary was {len(summary)} characters long, over the "
                 f"{char_limit} character limit. Rewrite it to a maximum of {retry_target} "
@@ -538,7 +559,12 @@ def is_disqualified(summary):
         return True
     if any(
         token in lowered
-        for token in ("i'm sorry", "i am sorry", "i don't understand", "i do not understand")
+        for token in (
+            "i'm sorry",
+            "i am sorry",
+            "i don't understand",
+            "i do not understand",
+        )
     ):
         return True
     if re.search(r"\breddit\b|r/cybersecurity", lowered):
@@ -575,14 +601,16 @@ def post_prep(title, selftext_html, comments=""):
     title = remove_multiple_spaces_from_string(title)
     text = remove_html_tags(selftext_html)
 
-    # openai seems to do better without any newlines
+    # The LLM seems to do better without any newlines.
     text = text.replace("\n", " ").replace("\r", "")
     text = remove_multiple_spaces_from_string(text)
 
     article = f"{title} ... {text}"
 
     if comments.strip():
-        article += "\n\nCOMMENTS (context only, ignore if not relevant):\n" + comments.strip()
+        article += (
+            "\n\nCOMMENTS (context only, ignore if not relevant):\n" + comments.strip()
+        )
 
     return article
 
@@ -592,7 +620,7 @@ def remove_multiple_spaces_from_string(input):
 
 
 def remove_html_tags(text):
-    """Remove html tags from a string"""
+    """Remove HTML tags from a string."""
     import re
 
     clean = re.compile("<.*?>")
