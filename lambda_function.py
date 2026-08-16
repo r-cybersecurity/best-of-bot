@@ -494,13 +494,19 @@ def invoke_summary(open_router, model, user_content, char_limit):
             response = open_router.chat.send(
                 model=model,
                 messages=messages,
-                max_tokens=65536,  # Includes lots of space for reasoning.
+                max_tokens=32768,  # Cap the total output budget (reasoning + response).
                 temperature=0.4,
                 # Route to the cheapest provider serving the model (sort by minimum
                 # price, no provider pinned), with graceful fallback if it errors.
-                provider={"sort": "price", "allow_fallbacks": True},
-                # DeepSeek V4 Flash supports thinking; enable it explicitly.
-                reasoning={"effort": "high"},
+                # Softly prefer providers that sustain at least 25 tokens/sec;
+                # slower endpoints are only deprioritized, never excluded.
+                provider={
+                    "sort": "price",
+                    "allow_fallbacks": True,
+                    "preferred_min_throughput": 25,
+                },
+                # DeepSeek V4 Flash supports thinking; keep it light for summaries.
+                reasoning={"effort": "low"},
                 # Bound each request so a stalled provider cannot hang the whole
                 # invocation; the retry loop above owns the retry policy.
                 timeout_ms=120000,
