@@ -360,12 +360,38 @@ def exception_detail(e):
     )
 
 
+S32_ALPHABET = "234567abcdefghijklmnopqrstuvwxyz"
+
+
+def s32_encode(value):
+    """Encode a non-negative integer with atproto's s32 (base32) alphabet."""
+    if value == 0:
+        return ""
+    chars = []
+    while value:
+        chars.append(S32_ALPHABET[value % 32])
+        value //= 32
+    return "".join(reversed(chars))
+
+
 def stable_record_key(*parts):
-    """Deterministic key derived from the post content, used as a Bluesky record
-    key and a Mastodon idempotency key. A retry after an ambiguous failure
-    (timeout, 5xx) writes the same key, so the platforms cannot create a
-    duplicate post."""
+    """Deterministic key derived from the post content, used as a Mastodon
+    idempotency key. A retry after an ambiguous failure (timeout, 5xx) sends the
+    same key, so Mastodon returns the existing status instead of posting a
+    duplicate."""
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def stable_tid(*parts):
+    """Deterministic Bluesky record key (a valid TID) derived from the post
+    content and a coarse time bucket, so a retry after an ambiguous failure
+    writes the same key and cannot create a duplicate post. The time bucket
+    keeps TIDs roughly chronological while staying stable across retries."""
+    digest = int.from_bytes(hashlib.sha256("|".join(parts).encode()).digest(), "big")
+    time_bucket = (int(time.time() * 1000) // 600000) * 600000  # 10-minute bucket
+    timestamp = time_bucket * 1000 + (digest % 1000)
+    clockid = (digest >> 10) % 32
+    return s32_encode(timestamp) + s32_encode(clockid).rjust(2, "2")
 
 
 def post_toot(post, title, context, link):
@@ -432,7 +458,7 @@ def post_skeet(post, title, context, link):
                 models.ComAtprotoRepoCreateRecord.Data(
                     repo=client.me.did,
                     collection="app.bsky.feed.post",
-                    rkey=stable_record_key(post, title, context, link),
+                    rkey=stable_tid(post, title, context, link),
                     record=models.AppBskyFeedPost.Record(
                         created_at=client.get_current_time_iso(),
                         text=post,
