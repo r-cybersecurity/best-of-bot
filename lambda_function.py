@@ -1,5 +1,6 @@
 import boto3
 import praw
+import hashlib
 import os
 import re
 import time
@@ -359,6 +360,14 @@ def exception_detail(e):
     )
 
 
+def stable_record_key(*parts):
+    """Deterministic key derived from the post content, used as a Bluesky record
+    key and a Mastodon idempotency key. A retry after an ambiguous failure
+    (timeout, 5xx) writes the same key, so the platforms cannot create a
+    duplicate post."""
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
 def post_toot(post, title, context, link):
     print("-- attempting toot")
     post_me = f"{post} {link}"
@@ -381,8 +390,14 @@ def post_toot(post, title, context, link):
                 client_secret=MASTO_CLIENT_SECRET,
                 access_token=MASTO_ACCESS_TOKEN,
             )
-            # Conservative: keep posts out of public timelines.
-            mastodon.status_post(post_me, visibility="unlisted")
+            # Conservative: keep posts out of public timelines. The idempotency
+            # key makes retries safe: Mastodon returns the same status instead
+            # of posting a duplicate.
+            mastodon.status_post(
+                post_me,
+                visibility="unlisted",
+                idempotency_key=stable_record_key(post_me),
+            )
             print(f"-- tooted {post_me}")
             return True
         else:
@@ -410,16 +425,34 @@ def post_skeet(post, title, context, link):
                 description=context,
                 title=title,
             )
-            client.send_post(
-                text=post,
-                embed=models.AppBskyEmbedExternal.Main(external=external_link),
+            # Write with a deterministic record key derived from the content, so
+            # a retry after a timeout or 5xx writes the same key and cannot
+            # create a duplicate post.
+            client.com.atproto.repo.create_record(
+                models.ComAtprotoRepoCreateRecord.Data(
+                    repo=client.me.did,
+                    collection="app.bsky.feed.post",
+                    rkey=stable_record_key(post, title, context, link),
+                    record=models.AppBskyFeedPost.Record(
+                        created_at=client.get_current_time_iso(),
+                        text=post,
+                        embed=models.AppBskyEmbedExternal.Main(external=external_link),
+                        langs=["en"],
+                    ),
+                )
             )
             print(f"-- skeeted {post}")
             return True
         else:
             print("-- environment variables not present to skeet")
     except Exception as e:
-        print(f"-- skeet caused exception {exception_detail(e)}")
+        detail = exception_detail(e)
+        # A duplicate record key means the PDS already holds this post (created
+        # by an earlier attempt whose response was lost), which is a success.
+        if "already has record" in detail:
+            print("-- skeet already posted, treating as success")
+            return True
+        print(f"-- skeet caused exception {detail}")
         return False
 
 
