@@ -3,7 +3,7 @@ import praw
 import os
 import re
 import time
-from atproto import Client, models
+from atproto import Client, Request, models
 from html import escape, unescape
 from botocore.exceptions import ClientError, NoCredentialsError
 from pprint import pprint
@@ -292,13 +292,37 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": "Exhausted all options for posting."}
 
 
+def retry_post(target, post, title, context, link, tries):
+    """Call ``target`` up to ``tries`` times until one succeeds, returning True
+    on success and False otherwise. Used to ride out transient provider errors
+    when posting."""
+    for attempt in range(1, tries + 1):
+        if attempt > 1:
+            print(f"-- post failed, retrying (attempt {attempt}/{tries})")
+        if target(post, title, context, link):
+            return True
+    return False
+
+
 def post_engine(target, summary, title, context, link):
-    prioritized_posts = [f"{summary}", f"{title}", ""]
-    succeeded = False
-    for post in prioritized_posts:
+    """Post the summary first, then the title, then a bare post, in that order.
+    Each candidate gets a few tries to ride out transient errors, and every
+    fallback is logged loudly so degradations are visible in CloudWatch."""
+    candidates = (
+        (f"{summary}", "summary", 3),
+        (f"{title}", "title", 3),
+        ("", "bare post", 1),
+    )
+    for index, (post, label, tries) in enumerate(candidates):
         clean_post = clean_tokens(post)
-        if not succeeded:
-            succeeded = target(clean_post, title, context, link)
+        if retry_post(target, clean_post, title, context, link, tries):
+            return
+        if index < len(candidates) - 1:
+            next_label = candidates[index + 1][1]
+            print(
+                f"-- {label} failed after {tries} attempts, "
+                f"falling back to {next_label}"
+            )
 
 
 def clean_tokens(text_data):
@@ -311,6 +335,28 @@ def clean_tokens(text_data):
         clean_tokens.append(clean_token)
 
     return " ".join(clean_tokens)
+
+
+def exception_detail(e):
+    """Return a diagnosable message for an exception. atproto request errors
+    either leave str(e) empty (bare InvokeTimeoutError/NetworkError raised from
+    httpx failures) or store the API error body on e.response.content
+    (BadRequestError and friends), so surface both explicitly."""
+    detail = ""
+    response = getattr(e, "response", None)
+    content = getattr(response, "content", None) if response is not None else None
+    if isinstance(content, dict):
+        detail = str(content)
+    elif content is not None:
+        error = getattr(content, "error", "")
+        message = getattr(content, "message", "")
+        detail = f"{error}: {message}".strip(": ") or str(content)
+    message = str(e)
+    return (
+        f"{type(e).__name__}: {message} ({detail})"
+        if detail
+        else f"{type(e).__name__}: {message}"
+    )
 
 
 def post_toot(post, title, context, link):
@@ -342,7 +388,7 @@ def post_toot(post, title, context, link):
         else:
             print("-- environment variables not present to toot")
     except Exception as e:
-        print(f"-- toot caused exception {str(e)}")
+        print(f"-- toot caused exception {exception_detail(e)}")
         return False
 
 
@@ -354,7 +400,10 @@ def post_skeet(post, title, context, link):
         BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
 
         if BSKY_USERNAME and BSKY_PASSWORD:
-            client = Client()
+            # The SDK defaults to httpx's 5-second timeout, which is too tight
+            # for a briefly slow PDS; use a generous timeout so a momentary
+            # slowdown doesn't kill the post.
+            client = Client(request=Request(timeout=30))
             client.login(BSKY_USERNAME, BSKY_PASSWORD)
             external_link = models.AppBskyEmbedExternal.External(
                 uri=link,
@@ -370,7 +419,7 @@ def post_skeet(post, title, context, link):
         else:
             print("-- environment variables not present to skeet")
     except Exception as e:
-        print(f"-- skeet caused exception {str(e)}")
+        print(f"-- skeet caused exception {exception_detail(e)}")
         return False
 
 
