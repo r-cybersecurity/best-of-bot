@@ -11,6 +11,7 @@ from pprint import pprint
 from mastodon import Mastodon
 from bs4 import BeautifulSoup
 from openrouter import OpenRouter
+from openrouter.utils import BackoffStrategy, RetryConfig
 
 
 # Summarizer system prompt. Kept at the top of the file, separate from the
@@ -171,6 +172,24 @@ HARD RULES
 # Any response shorter than this is not a real summary (for example a provider
 # returning a reasoning-only or empty completion) and gets retried.
 MIN_SUMMARY_LENGTH = 40
+
+# The OpenRouter SDK applies its own internal retry loop on 5xx and stalled
+# providers, with a default max_elapsed_time of one hour (see openrouter's
+# RetryConfig/BackoffStrategy). That can keep a single chat.send() alive far
+# past the Lambda's 15-minute timeout, so the per-request timeout_ms is never
+# reached. The summarizer already owns retry policy (three bounded attempts in
+# invoke_summary), so disable SDK-level retries and let timeout_ms bound each
+# request.
+NO_RETRY = RetryConfig(
+    strategy="none",
+    backoff=BackoffStrategy(
+        initial_interval=0,
+        max_interval=0,
+        exponent=1.0,
+        max_elapsed_time=0,
+    ),
+    retry_connection_errors=False,
+)
 
 
 class SummaryGenerationError(RuntimeError):
@@ -637,7 +656,7 @@ def summarize(title, selftext_html, comments, char_limit):
 
     user_content = post_prep(title, selftext_html, comments)
 
-    with OpenRouter(api_key=api_key) as open_router:
+    with OpenRouter(api_key=api_key, retry_config=NO_RETRY) as open_router:
         return invoke_summary(open_router, model, user_content, char_limit)
 
 
